@@ -1,4 +1,5 @@
 import sys
+import requests
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pandas only supports SQLAlchemy connectable.*")
 import json
@@ -296,6 +297,34 @@ def execute_values_mysql(cursor, query_template, values):
         flat_args.extend(row)
     cursor.execute(query, flat_args)
 
+def resolve_google_share_url(url, timeout=15):
+    """
+    Resolve a share.google redirect to a full URL.
+    Returns the original URL if not a share URL, or if resolution fails.
+    """
+    if not url or not url.startswith("https://share.google/"):
+        return url
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        # Try HEAD request first as it is much faster
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=timeout)
+        if response.status_code < 400:
+            return response.url
+        # Fallback to GET if HEAD failed
+        response = requests.get(url, headers=headers, allow_redirects=True, timeout=timeout)
+        return response.url
+    except Exception as e:
+        print(f"Error resolving share URL '{url}': {e}")
+        return url
+
+def resolve_urls_concurrently(urls, max_workers=10):
+    """Resolve a list of URLs concurrently using ThreadPoolExecutor."""
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        resolved_urls = list(executor.map(lambda u: resolve_google_share_url(u), urls))
+    return resolved_urls
+
 def _get_db_credentials():
     mysql_host = os.environ.get("MYSQL_HOST")
     mysql_port = os.environ.get("MYSQL_PORT") or "3306"
@@ -435,6 +464,7 @@ def create_tables_if_needed():
         last_response           TEXT,
         osb_url_match           VARCHAR(1024),
         google_seller_page_url  VARCHAR(2048),
+        google_seller_page_full_url VARCHAR(2048),
         cid                     VARCHAR(64),
         pid                     VARCHAR(64),
         osb_position            SMALLINT        DEFAULT 0,
@@ -550,6 +580,13 @@ def create_tables_if_needed():
             pass
 
         try:
+            cursor.execute("SHOW COLUMNS FROM google_shopping_results LIKE 'google_seller_page_full_url'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE google_shopping_results ADD COLUMN google_seller_page_full_url VARCHAR(2048) AFTER google_seller_page_url")
+        except Exception as e:
+            print(f"Warning: Failed to add google_seller_page_full_url column: {e}")
+
+        try:
             cursor.execute("SHOW INDEX FROM osb_products WHERE Key_name = 'idx_osb_dynamic_queue'")
             if not cursor.fetchone():
                 cursor.execute("CREATE INDEX idx_osb_dynamic_queue ON osb_products (status, scraping_status, retry_count, mfr_sales_30d, product_id)")
@@ -662,13 +699,17 @@ def insert_to_postgres(product_results, seller_results):
 
         # 1. Upsert google_shopping_results
         if valid_product_results:
+            # Resolve short share URLs concurrently first
+            urls_to_resolve = [r.get("product_url", "") for r in valid_product_results]
+            resolved_urls = resolve_urls_concurrently(urls_to_resolve)
+
             prod_insert = """
                 INSERT INTO google_shopping_results (
                     product_id, card_index, google_title, google_description, gs_main_image, gs_images,
                     brand, color, width, height, depth, style, material, shape, assembly_required, weight,
                     rating_star, rating_count, typical_price_low, typical_price_high,
                     best_price_url, popular_url, other_attributes,
-                    last_response, osb_url_match, google_seller_page_url, cid, pid,
+                    last_response, osb_url_match, google_seller_page_url, google_seller_page_full_url, cid, pid,
                     osb_position, osb_id, seller_count, status, scraped_at, updated_at
                 ) VALUES %s
                 ON DUPLICATE KEY UPDATE
@@ -696,6 +737,7 @@ def insert_to_postgres(product_results, seller_results):
                     last_response = VALUES(last_response),
                     osb_url_match = VALUES(osb_url_match),
                     google_seller_page_url = VALUES(google_seller_page_url),
+                    google_seller_page_full_url = VALUES(google_seller_page_full_url),
                     cid = VALUES(cid),
                     pid = VALUES(pid),
                     osb_position = VALUES(osb_position),
@@ -705,7 +747,7 @@ def insert_to_postgres(product_results, seller_results):
                     updated_at = CURRENT_TIMESTAMP
             """
             prod_values = []
-            for r in valid_product_results:
+            for idx, r in enumerate(valid_product_results):
                 gs_images_raw = r.get("gs_images", [])
                 if isinstance(gs_images_raw, str):
                     try:
@@ -743,6 +785,8 @@ def insert_to_postgres(product_results, seller_results):
                     except:
                         typical_price_high_val = None
 
+                full_url = resolved_urls[idx]
+
                 prod_values.append((
                      _clean_int(r.get("product_id")),
                      int(r.get("card_index", 1) or 1),
@@ -770,6 +814,7 @@ def insert_to_postgres(product_results, seller_results):
                      _clean_str(r.get("last_response"), default=''),
                      _clean_str(r.get("osb_url_match"), 1024),
                      _clean_str(r.get("product_url"), 2048),
+                     _clean_str(full_url, 2048),
                      _clean_str(r.get("cid"), 64),
                      _clean_str(r.get("pid"), 64),
                      int(r.get("osb_position", 0) or 0),
@@ -1826,7 +1871,7 @@ def reset_error_products_to_pending():
             "UPDATE osb_products SET scraping_status = 'pending', claimed_at = NULL, claimed_by = NULL WHERE scraping_status = 'error'"
         )
         cursor.execute(
-            "UPDATE google_shopping_results SET google_seller_page_url = NULL WHERE status IN ('selection_error', 'product_not_clickable', 'no_products', 'captcha_failed')"
+            "UPDATE google_shopping_results SET google_seller_page_url = NULL, google_seller_page_full_url = NULL WHERE status IN ('selection_error', 'product_not_clickable', 'no_products', 'captcha_failed')"
         )
         conn.commit()
         affected_rows = cursor.rowcount
@@ -4252,11 +4297,11 @@ def reset_cached_product_url(product_id):
         conn = _get_pg_conn()
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE google_shopping_results SET google_seller_page_url = NULL WHERE product_id = %s",
+            "UPDATE google_shopping_results SET google_seller_page_url = NULL, google_seller_page_full_url = NULL WHERE product_id = %s",
             (str(product_id),)
         )
         conn.commit()
-        print(f"✓ Reset google_seller_page_url for product {product_id} to NULL.")
+        print(f"✓ Reset google_seller_page_url and google_seller_page_full_url for product {product_id} to NULL.")
     except Exception as e:
         print(f"Error resetting google_seller_page_url for {product_id}: {e}")
         if conn:
@@ -4931,6 +4976,7 @@ def main():
     parser.add_argument('--start-id', type=str, default=None, help='Start product ID boundary for this account partition')
     parser.add_argument('--end-sales', type=str, default=None, help='End sales boundary for this account partition')
     parser.add_argument('--end-id', type=str, default=None, help='End product ID boundary for this account partition')
+    parser.add_argument('--product-ids', type=str, default=None, help='Comma-separated list of product IDs to scrape directly')
     
     args = parser.parse_args()
     args.claim_limit = int(args.claim_limit) if args.claim_limit is not None else None
@@ -4975,7 +5021,16 @@ def main():
     print(f"Total pending products in DB: {total_pending}")
 
     if not args.offset_mode:
-        if args.start_id or args.end_id:
+        if args.product_ids:
+            print(f"Direct product mode: IDs={args.product_ids}")
+            worker_product_ids = [pid.strip() for pid in args.product_ids.split(",") if pid.strip()]
+            chunk_df = claim_specific_products_from_db(
+                worker_product_ids, 
+                worker_id=args.worker_id, 
+                limit=len(worker_product_ids), 
+                ttl_minutes=args.claim_ttl_minutes
+            )
+        elif args.start_id or args.end_id:
             print(f"Boundary partition mode: start=({args.start_sales}, {args.start_id}) end=({args.end_sales}, {args.end_id})")
             product_ids = get_product_ids_in_boundary(args.start_sales, args.start_id, args.end_sales, args.end_id)
             M = len(product_ids)
