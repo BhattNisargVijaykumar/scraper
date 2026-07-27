@@ -129,6 +129,7 @@ CREATE TABLE google_shopping_results (
     last_response           TEXT,                           -- raw API/HTML response; truly unbounded
     osb_url_match           VARCHAR(1024),
     google_seller_page_url  VARCHAR(2048),
+    google_seller_page_full_url VARCHAR(2048),
     cid                     VARCHAR(64),
     pid                     VARCHAR(64),
     osb_position            SMALLINT        DEFAULT 0,
