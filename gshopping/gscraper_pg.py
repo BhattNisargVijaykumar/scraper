@@ -308,12 +308,9 @@ def resolve_google_share_url(url, timeout=15):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
-        # Try HEAD request first as it is much faster
-        response = requests.head(url, headers=headers, allow_redirects=True, timeout=timeout)
-        if response.status_code < 400:
-            return response.url
-        # Fallback to GET if HEAD failed
-        response = requests.get(url, headers=headers, allow_redirects=True, timeout=timeout)
+        # We must use GET because Google's share redirects do not resolve fully with HEAD requests.
+        # Passing stream=True avoids downloading the large HTML response body of the target search page.
+        response = requests.get(url, headers=headers, allow_redirects=True, timeout=timeout, stream=True)
         return response.url
     except Exception as e:
         print(f"Error resolving share URL '{url}': {e}")
