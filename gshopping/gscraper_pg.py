@@ -578,7 +578,6 @@ def create_tables_if_needed():
             pass
 
         try:
-        try:
             cursor.execute("SHOW COLUMNS FROM google_shopping_results LIKE 'google_seller_page_full_url'")
             if not cursor.fetchone():
                 cursor.execute("ALTER TABLE google_shopping_results ADD COLUMN google_seller_page_full_url VARCHAR(2048) AFTER google_seller_page_url")

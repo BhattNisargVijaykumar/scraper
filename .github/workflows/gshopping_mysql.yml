@@ -73,7 +73,6 @@ on:
         required: false
         default: "true"
         type: string
-        type: string
 
 permissions:
   contents: read
