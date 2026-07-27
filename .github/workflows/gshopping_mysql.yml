@@ -100,7 +100,11 @@ jobs:
 
       - id: matrix
         run: |
-          TOTAL_CHUNKS=${{ github.event.inputs.total_chunks || 40 }}
+          if [ -n "${{ github.event.inputs.product_ids }}" ]; then
+            TOTAL_CHUNKS=1
+          else
+            TOTAL_CHUNKS=${{ github.event.inputs.total_chunks || 40 }}
+          fi
 
           MATRIX="["
           for ((i=1;i<=TOTAL_CHUNKS;i++)); do
@@ -204,7 +208,11 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 3
 
-          TOTAL_WORKERS="${{ github.event.inputs.total_chunks || 40 }}"
+          if [ -n "$PRODUCT_IDS" ]; then
+            TOTAL_WORKERS=1
+          else
+            TOTAL_WORKERS="${{ github.event.inputs.total_chunks || 40 }}"
+          fi
 
           python -u gshopping/gscraper_pg.py \
             --chunk-id ${{ matrix.worker_index }} \
@@ -327,7 +335,7 @@ jobs:
           PY
 
       - name: Trigger next round workflow
-        if: ${{ fromJSON(steps.check_rem.outputs.pending_count || '0') > 0 && fromJSON(github.event.inputs.run_depth || '1') < fromJSON(github.event.inputs.max_depth || '50') }}
+        if: ${{ github.event.inputs.product_ids == '' && fromJSON(steps.check_rem.outputs.pending_count || '0') > 0 && fromJSON(github.event.inputs.run_depth || '1') < fromJSON(github.event.inputs.max_depth || '50') }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -367,7 +375,7 @@ jobs:
             core.info(`Triggered next round depth=${nextDepth}`);
 
       - name: Generate and upload reports if no products remaining
-        if: ${{ fromJSON(steps.check_rem.outputs.pending_count || '0') == 0 && fromJSON(steps.check_rem.outputs.claimed_count || '0') == 0 }}
+        if: ${{ github.event.inputs.product_ids == '' && fromJSON(steps.check_rem.outputs.pending_count || '0') == 0 && fromJSON(steps.check_rem.outputs.claimed_count || '0') == 0 }}
         env:
           MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
           MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
