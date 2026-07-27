@@ -1,5 +1,4 @@
 import sys
-import requests
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pandas only supports SQLAlchemy connectable.*")
 import json
@@ -305,6 +304,7 @@ def resolve_google_share_url(url, timeout=15):
     if not url or not url.startswith("https://share.google/"):
         return url
     try:
+        import requests
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
