@@ -299,23 +299,34 @@ WHERE
     AND scraping_status = 'completed'
 ORDER BY last_attempt DESC
 
+SHOW PROCESSLIST;
+
 SELECT
     product_id,
     google_seller_page_url,
+    google_seller_page_full_url
+FROM google_shopping_results
+WHERE
+    google_seller_page_url LIKE 'https://share.google%';
+
+SELECT
+    product_id,
+    google_seller_page_url,
+    google_seller_page_full_url,
     osb_url_match,
     updated_at,
     other_attributes
 FROM google_shopping_results
 WHERE
-    -- product_id IN (
-    --     SELECT product_id
-    --     FROM osb_products
-    --     WHERE
-    --         status = 1
-    --         AND scraping_status = 'completed'
-    -- )
-    -- AND 
-    google_seller_page_url != ''
+    product_id IN (
+        SELECT product_id
+        FROM osb_products
+        WHERE
+            is_osb_url_imported = 0
+            AND status = 1
+            AND scraping_status = 'completed'
+    )
+    AND google_seller_page_url != ''
     AND osb_url_match = 'Yes'
 ORDER BY updated_at DESC;
 
@@ -323,4 +334,19 @@ SELECT *
 FROM osb_products
 WHERE
     status = 1
-    AND product_id = 10742
+    AND product_id = 10742;
+
+-- Add is_osb_url_imported column to osb_products table
+ALTER TABLE osb_products
+ADD COLUMN is_osb_url_imported BOOLEAN DEFAULT FALSE;
+
+UPDATE osb_products SET is_osb_url_imported = 1;
+
+SELECT
+    product_id,
+    google_seller_page_url,
+    google_seller_page_full_url
+FROM google_shopping_results
+WHERE
+    google_seller_page_url LIKE 'https://share.google%'
+    AND google_seller_page_full_url IS NULL

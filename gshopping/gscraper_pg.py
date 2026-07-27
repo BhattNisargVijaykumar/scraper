@@ -411,6 +411,7 @@ def create_tables_if_needed():
         claimed_by      VARCHAR(128),
         claimed_at      DATETIME,
         retry_count     INT             DEFAULT 0,
+        is_osb_url_imported BOOLEAN     DEFAULT FALSE,
         keyword         VARCHAR(2048),
         url             VARCHAR(2048),
         last_attempt    DATETIME,
@@ -577,11 +578,19 @@ def create_tables_if_needed():
             pass
 
         try:
+        try:
             cursor.execute("SHOW COLUMNS FROM google_shopping_results LIKE 'google_seller_page_full_url'")
             if not cursor.fetchone():
                 cursor.execute("ALTER TABLE google_shopping_results ADD COLUMN google_seller_page_full_url VARCHAR(2048) AFTER google_seller_page_url")
         except Exception as e:
             print(f"Warning: Failed to add google_seller_page_full_url column: {e}")
+
+        try:
+            cursor.execute("SHOW COLUMNS FROM osb_products LIKE 'is_osb_url_imported'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE osb_products ADD COLUMN is_osb_url_imported BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
 
         try:
             cursor.execute("SHOW INDEX FROM osb_products WHERE Key_name = 'idx_osb_dynamic_queue'")

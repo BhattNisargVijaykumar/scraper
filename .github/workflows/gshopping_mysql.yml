@@ -68,6 +68,12 @@ on:
         required: false
         default: ""
         type: string
+      run_resolve_redirects:
+        description: "Resolve Google share URLs (main repository only)"
+        required: false
+        default: "true"
+        type: string
+        type: string
 
 permissions:
   contents: read
@@ -351,6 +357,7 @@ jobs:
             const startId = '${{ github.event.inputs.start_id }}';
             const endSales = '${{ github.event.inputs.end_sales }}';
             const endId = '${{ github.event.inputs.end_id }}';
+            const runResolveRedirects = '${{ github.event.inputs.run_resolve_redirects || 'true' }}';
 
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -365,6 +372,7 @@ jobs:
                 run_depth: String(nextDepth),
                 max_depth: maxDepth,
                 reset_errors: 'false',
+                run_resolve_redirects: runResolveRedirects,
                 start_sales: startSales,
                 start_id: startId,
                 end_sales: endSales,
@@ -373,6 +381,17 @@ jobs:
             });
 
             core.info(`Triggered next round depth=${nextDepth}`);
+
+      - name: Resolve Google Seller Page Redirect URLs (Main Repository Only)
+        if: ${{ (github.event.inputs.run_resolve_redirects != 'false') && (github.repository == 'yashypsoft/scraper' || !github.event.repository.fork) }}
+        env:
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASS: ${{ secrets.MYSQL_PASS }}
+          MYSQL_DB: ${{ secrets.MYSQL_DB }}
+        run: |
+          python resolve_redirects.py --chunk-size 500 --max-workers 15
 
       - name: Generate and upload reports if no products remaining
         if: ${{ github.event.inputs.product_ids == '' && fromJSON(steps.check_rem.outputs.pending_count || '0') == 0 && fromJSON(steps.check_rem.outputs.claimed_count || '0') == 0 }}
