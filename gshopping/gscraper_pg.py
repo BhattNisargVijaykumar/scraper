@@ -4557,7 +4557,6 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
         def worker_thread():
             thread_id = threading.get_ident()
             driver = None
-            conn = None
             try:
                 driver = setup_driver(max_attempts=3, base_delay=5)
             except Exception as e:
@@ -4612,17 +4611,8 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                     print(f"\n[Thread {thread_id}] Processing {index+1}/{len(df)}: Product ID {product_id}")
                     
                     # Check database status and claim the product atomically before scraping
-                    try:
-                        if conn is None or not conn.open:
-                            conn = _get_pg_conn()
-                    except Exception as db_err:
-                        print(f"[Thread {thread_id}] Database connection failed: {db_err}")
-                        time.sleep(5)
-
-                    if not verify_and_claim_product(product_id, resolved_worker_id, ttl_minutes, conn=conn):
+                    if not verify_and_claim_product(product_id, resolved_worker_id, ttl_minutes):
                         print(f"[Thread {thread_id}] Skipping product {product_id} - already claimed/completed by another worker.")
-                        if conn and not conn.open:
-                            conn = None
                         continue
                     
                     try:
@@ -4705,11 +4695,6 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                 try:
                     if driver:
                         driver.quit()
-                except Exception:
-                    pass
-                try:
-                    if conn:
-                        conn.close()
                 except Exception:
                     pass
 
