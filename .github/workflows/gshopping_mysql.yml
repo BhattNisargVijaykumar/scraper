@@ -63,6 +63,11 @@ on:
         required: true
         default: "false"
         type: boolean
+      product_ids:
+        description: "Comma-separated list of product IDs to scrape directly (optional)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -194,6 +199,7 @@ jobs:
           MAX_RUNTIME_HOURS: ${{ github.event.inputs.max_runtime_hours || '5.5' }}
           CLAIM_LIMIT: ${{ github.event.inputs.claim_limit }}
           SCRAPER_WORKER_ID: gshopping-mysql-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.worker_index }}
+          PRODUCT_IDS: ${{ github.event.inputs.product_ids }}
         run: |
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 3
@@ -209,7 +215,8 @@ jobs:
             --start-sales "${{ github.event.inputs.start_sales }}" \
             --start-id "${{ github.event.inputs.start_id }}" \
             --end-sales "${{ github.event.inputs.end_sales }}" \
-            --end-id "${{ github.event.inputs.end_id }}"
+            --end-id "${{ github.event.inputs.end_id }}" \
+            --product-ids "$PRODUCT_IDS"
 
   dispatch_next_round:
     needs: scrape
