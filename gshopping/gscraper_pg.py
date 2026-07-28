@@ -2585,7 +2585,6 @@ def setup_driver(max_attempts=3, base_delay=4, headless=False):
     for attempt in range(1, max_attempts + 1):
         driver = None
         try:
-            time.sleep(2)
             options = build_chrome_options()
             chrome_bin = os.environ.get("CHROME_BIN")
             chromedriver_bin = os.environ.get("CHROMEDRIVER_BIN")
@@ -2755,11 +2754,6 @@ def handle_captcha(driver, url):
     max_retries = _env_int("CAPTCHA_MAX_RETRIES", 2)
 
     recaptcha = detects_recaptcha(driver)
-    if not recaptcha:
-        # Brief pause to catch asynchronously appearing CAPTCHA overlays
-        time.sleep(1.2)
-        recaptcha = detects_recaptcha(driver)
-
     if not recaptcha:
         return "no_captcha"
 
@@ -3054,9 +3048,8 @@ def get_product_about_info(driver):
             if aria_expanded == 'false' or not aria_expanded:
                 print("Clicking 'More details' button to expand attributes...")
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", more_button)
-                time.sleep(1)
                 more_button.click()
-                time.sleep(2)  # Wait for expansion
+                time.sleep(0.3)  # Wait for expansion
         except:
             print("No 'More details' button found or already expanded")
         
@@ -3448,15 +3441,12 @@ def extract_share_url(driver):
             return ""
 
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", share_button)
-        time.sleep(0.4)
 
         # Click Share button
         try:
             share_button.click()
         except Exception:
             driver.execute_script("arguments[0].click();", share_button)
-
-        time.sleep(0.5)
 
         # Close any accidentally opened new tab/window if a social link was clicked
         if len(driver.window_handles) > 1:
@@ -3537,9 +3527,8 @@ def expand_more_stores(driver):
             if not more_stores.is_displayed() or not more_stores.is_enabled():
                 break
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", more_stores)
-            time.sleep(0.5)
             more_stores.click()
-            time.sleep(random.uniform(1.5, 2.5))
+            time.sleep(0.4)
             clicks += 1
             
             try:
@@ -3856,7 +3845,6 @@ def try_click_product(driver, cid, product_name=""):
                 raise Exception(f"Product element not found (cid='{cid}', name='{product_name}')")
 
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-            time.sleep(0.4)
 
             # Try clicking title div / image / non-support anchor inside element, fallback to element itself
             clicked = False
@@ -3904,7 +3892,6 @@ def try_click_product(driver, cid, product_name=""):
                 return False
 
             WebDriverWait(driver, PANEL_WAIT_SECONDS).until(panel_loaded)
-            time.sleep(random.uniform(0.5, 1.0))
             return True
         except Exception as exc:
             last_error = exc
@@ -3956,12 +3943,10 @@ def find_second_multiseller_product(driver, product_id, base_result, osb_url, ch
     try:
         driver.back()
         wait_for_product_container(driver, timeout=10)
-        time.sleep(random.uniform(1.0, 2.0))
     except Exception:
         try:
             driver.get(current_search_url)
             wait_for_product_container(driver, timeout=10)
-            time.sleep(random.uniform(1.0, 2.0))
         except Exception:
             pass
 
@@ -3995,7 +3980,6 @@ def find_second_multiseller_product(driver, product_id, base_result, osb_url, ch
         try:
             driver.back()
             wait_for_product_container(driver, timeout=10)
-            time.sleep(random.uniform(1.0, 2.0))
         except Exception:
             break
 
@@ -4010,7 +3994,6 @@ def find_second_multiseller_product(driver, product_id, base_result, osb_url, ch
                     continue
                 
                 wait_for_product_container(driver, timeout=10)
-                time.sleep(random.uniform(1.5, 2.5))
                 
                 p_cards = get_visible_product_cards(driver)
                 p_candidate_metas = []
@@ -4040,7 +4023,6 @@ def find_second_multiseller_product(driver, product_id, base_result, osb_url, ch
                     try:
                         driver.back()
                         wait_for_product_container(driver, timeout=10)
-                        time.sleep(random.uniform(1.0, 2.0))
                     except Exception:
                         break
             except Exception as exc:
@@ -4059,7 +4041,6 @@ def run_product_selection_phase(driver, product_id, phase_name, search_url, base
         driver.get(search_url)
     try:
         wait_for_product_container(driver, timeout=10)
-        time.sleep(random.uniform(1.5, 2.5))
     except Exception as exc:
         phase_result = dict(base_result)
         phase_result['url'] = search_url
@@ -4156,11 +4137,9 @@ def run_product_selection_phase(driver, product_id, phase_name, search_url, base
             try:
                 driver.back()
                 wait_for_product_container(driver, timeout=10)
-                time.sleep(random.uniform(1.0, 2.0))
             except Exception:
                 driver.get(search_url)
                 wait_for_product_container(driver, timeout=10)
-                time.sleep(random.uniform(1.0, 2.0))
 
     final_fallback = fallback_result or dict(base_result)
     final_fallback['card_index'] = 1
