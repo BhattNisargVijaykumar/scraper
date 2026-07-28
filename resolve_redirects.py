@@ -156,7 +156,7 @@ def process_db_chunk(conn, rows, max_workers, batch_size, headers):
     return total_updated, total_failed
 
 
-def process_db(max_workers, batch_size, chunk_size, total_limit, headers):
+def process_db(max_workers, batch_size, chunk_size, total_limit, headers, chunk_id=1, total_chunks=1):
     print("Connecting to MySQL database...")
     try:
         conn = get_db_connection()
@@ -164,28 +164,30 @@ def process_db(max_workers, batch_size, chunk_size, total_limit, headers):
         print(f"Error connecting to database: {e}")
         return
 
+    # Using parameter formatting, so all literal % characters must be escaped as %%
     query_count = """
     SELECT COUNT(*)
     FROM google_shopping_results
     WHERE
-        google_seller_page_url LIKE 'https://share.google%'
+        google_seller_page_url LIKE 'https://share.google%%'
         AND (
             google_seller_page_full_url IS NULL 
             OR google_seller_page_full_url = ''
-            OR google_seller_page_full_url LIKE '%google.com/sorry%'
-            OR google_seller_page_full_url LIKE '%share.google%'
-        );
+            OR google_seller_page_full_url LIKE '%%google.com/sorry%%'
+            OR google_seller_page_full_url LIKE '%%share.google%%'
+        )
+        AND (id %% %s = %s);
     """
     try:
         with conn.cursor() as cursor:
-            cursor.execute(query_count)
+            cursor.execute(query_count, (total_chunks, chunk_id - 1))
             total_pending = cursor.fetchone()[0]
     except Exception as e:
         print(f"Error counting pending records: {e}")
         conn.close()
         return
 
-    print(f"Total pending share.google records in DB: {total_pending}")
+    print(f"Worker {chunk_id}/{total_chunks} - Total pending share.google records in DB: {total_pending}")
     if total_pending == 0:
         print("No pending records to process.")
         conn.close()
@@ -221,10 +223,11 @@ def process_db(max_workers, batch_size, chunk_size, total_limit, headers):
                         OR google_seller_page_full_url LIKE '%%google.com/sorry%%'
                         OR google_seller_page_full_url LIKE '%%share.google%%'
                     )
+                    AND (id %% %s = %s)
                 ORDER BY id ASC
                 LIMIT %s;
                 """
-                cursor.execute(query, (fetch_limit,))
+                cursor.execute(query, (total_chunks, chunk_id - 1, fetch_limit))
                 rows = cursor.fetchall()
 
             if not rows:
@@ -340,6 +343,18 @@ def main():
         default=None,
         help="Optional max total records to process across all chunks."
     )
+    parser.add_argument(
+        "--chunk-id",
+        type=int,
+        default=1,
+        help="The 1-based index of this parallel worker (default: 1)."
+    )
+    parser.add_argument(
+        "--total-chunks",
+        type=int,
+        default=1,
+        help="The total number of parallel workers (default: 1)."
+    )
 
     args = parser.parse_args()
 
@@ -355,7 +370,15 @@ def main():
     if args.csv:
         process_csv(args.csv, args.max_workers, args.chunk_size, headers)
     else:
-        process_db(args.max_workers, args.batch_size, args.chunk_size, args.limit, headers)
+        process_db(
+            args.max_workers,
+            args.batch_size,
+            args.chunk_size,
+            args.limit,
+            headers,
+            chunk_id=args.chunk_id,
+            total_chunks=args.total_chunks
+        )
 
 
 if __name__ == '__main__':
