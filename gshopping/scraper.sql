@@ -330,17 +330,10 @@ WHERE
     AND osb_url_match = 'Yes'
 ORDER BY updated_at DESC;
 
-SELECT *
-FROM osb_products
-WHERE
-    status = 1
-    AND product_id = 10742;
-
+SELECT * FROM osb_products WHERE is_osb_url_imported = 1;
 -- Add is_osb_url_imported column to osb_products table
 ALTER TABLE osb_products
 ADD COLUMN is_osb_url_imported BOOLEAN DEFAULT FALSE;
-
-UPDATE osb_products SET is_osb_url_imported = 1;
 
 SELECT
     product_id,
@@ -348,5 +341,31 @@ SELECT
     google_seller_page_full_url
 FROM google_shopping_results
 WHERE
-    google_seller_page_full_url LIKE "%share.google%"
-    AND google_seller_page_full_url IS NULL
+    google_seller_page_full_url LIKE 'https://share.google.%';
+
+SELECT google_seller_page_full_url, count(*)
+FROM google_shopping_results
+GROUP BY
+    google_seller_page_full_url
+HAVING
+    count(*) > 1
+
+UPDATE google_shopping_results
+SET
+    google_seller_page_full_url = null
+WHERE
+    google_seller_page_full_url IN (
+        SELECT a
+        FROM (
+                SELECT google_seller_page_full_url as a
+                FROM google_shopping_results
+                GROUP BY
+                    google_seller_page_full_url
+                HAVING
+                    count(*) > 1
+            ) AS a
+    );
+
+UPDATE google_shopping_results
+SET
+    google_seller_page_full_url = google_seller_page_url
