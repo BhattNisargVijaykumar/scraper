@@ -348,5 +348,5 @@ SELECT
     google_seller_page_full_url
 FROM google_shopping_results
 WHERE
-    google_seller_page_url IS NOT NULL
+    google_seller_page_full_url LIKE "%share.google%"
     AND google_seller_page_full_url IS NULL

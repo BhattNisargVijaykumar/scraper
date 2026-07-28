@@ -4153,7 +4153,7 @@ def get_existing_product_url_from_db(product_id):
         conn = _get_pg_conn()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT google_seller_page_url, osb_url_match FROM google_shopping_results WHERE product_id = %s ORDER BY card_index ASC LIMIT 1",
+            "SELECT COALESCE(NULLIF(google_seller_page_full_url, ''), google_seller_page_url), osb_url_match FROM google_shopping_results WHERE product_id = %s ORDER BY card_index ASC LIMIT 1",
             (str(product_id),)
         )
         row = cursor.fetchone()
@@ -4161,7 +4161,12 @@ def get_existing_product_url_from_db(product_id):
             p_url = row[0].strip()
             osb_match = str(row[1] or '').strip()
             if osb_match == 'Yes':
-                is_valid_url = p_url.startswith("https://www.google.com/search?ibp=oshop") or p_url.startswith("https://share.google/")
+                is_valid_url = (
+                    p_url.startswith("https://www.google.com/") 
+                    or p_url.startswith("https://google.com/") 
+                    or p_url.startswith("https://share.google/")
+                    or "google.com" in p_url
+                )
                 if is_valid_url:
                     return p_url
         return None
