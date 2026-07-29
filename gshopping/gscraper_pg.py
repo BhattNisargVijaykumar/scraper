@@ -412,6 +412,7 @@ def create_tables_if_needed():
         claimed_at      DATETIME,
         retry_count     INT             DEFAULT 0,
         is_osb_url_imported BOOLEAN     DEFAULT FALSE,
+        priority        INT             DEFAULT 0,
         keyword         VARCHAR(2048),
         url             VARCHAR(2048),
         last_attempt    DATETIME,
@@ -420,6 +421,7 @@ def create_tables_if_needed():
         updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_osb_scrape_queue (status, scraping_status, mfr_sales_30d),
         INDEX idx_osb_dynamic_queue (status, scraping_status, retry_count, mfr_sales_30d, product_id),
+        INDEX idx_osb_priority_queue (status, scraping_status, priority, retry_count, mfr_sales_30d, product_id),
         INDEX idx_osb_brand (brand),
         INDEX idx_osb_gtin (gtin),
         INDEX idx_osb_mpn (mpn)
@@ -592,11 +594,25 @@ def create_tables_if_needed():
             pass
 
         try:
+            cursor.execute("SHOW COLUMNS FROM osb_products LIKE 'priority'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE osb_products ADD COLUMN priority INT DEFAULT 0")
+        except Exception as e:
+            print(f"Warning: Failed to add priority column: {e}")
+
+        try:
             cursor.execute("SHOW INDEX FROM osb_products WHERE Key_name = 'idx_osb_dynamic_queue'")
             if not cursor.fetchone():
                 cursor.execute("CREATE INDEX idx_osb_dynamic_queue ON osb_products (status, scraping_status, retry_count, mfr_sales_30d, product_id)")
         except Exception:
             pass
+
+        try:
+            cursor.execute("SHOW INDEX FROM osb_products WHERE Key_name = 'idx_osb_priority_queue'")
+            if not cursor.fetchone():
+                cursor.execute("CREATE INDEX idx_osb_priority_queue ON osb_products (status, scraping_status, priority, retry_count, mfr_sales_30d, product_id)")
+        except Exception as e:
+            print(f"Warning: Failed to create priority queue index: {e}")
 
         conn.commit()
     except Exception as e:
@@ -1159,14 +1175,15 @@ def sync_csv_to_db(csv_path):
 
         insert_query = """
             INSERT INTO osb_products (
-                product_id, web_id, name, sku, mpn, gtin, brand, product_type, keyword, url, osb_url, status, mfr_sales_30d
+                product_id, web_id, name, sku, mpn, gtin, brand, product_type, keyword, url, osb_url, status, mfr_sales_30d, priority
             )
             VALUES %s
             ON DUPLICATE KEY UPDATE
                 status = VALUES(status),
                 mfr_sales_30d = VALUES(mfr_sales_30d),
                 name = VALUES(name),
-                keyword = VALUES(keyword)
+                keyword = VALUES(keyword),
+                priority = VALUES(priority)
         """
         
         batch_size = 5000
@@ -1205,6 +1222,9 @@ def sync_csv_to_db(csv_path):
                 p_status = row_dict.get('status', 1)
                 if pd.isna(p_status) or p_status == '': p_status = 1
 
+                p_priority = row_dict.get('priority', 0)
+                if pd.isna(p_priority) or p_priority == '': p_priority = 0
+
                 values.append((
                     _clean_int(row_dict.get('product_id')),
                     clean_str(row_dict.get('web_id'), 32),
@@ -1218,7 +1238,8 @@ def sync_csv_to_db(csv_path):
                     clean_str(row_dict.get('url'), 2048),
                     clean_str(row_dict.get('osb_url'), 1024),
                     int(p_status),
-                    int(sales)
+                    int(sales),
+                    _clean_int(p_priority)
                 ))
             
             try:
@@ -1417,7 +1438,7 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
             SELECT product_id
             FROM osb_products
             WHERE status = 1 AND scraping_status = %s AND retry_count < 3
-            ORDER BY retry_count ASC, COALESCE(mfr_sales_30d, 0) DESC, product_id ASC
+            ORDER BY priority DESC, retry_count ASC, COALESCE(mfr_sales_30d, 0) DESC, product_id ASC
             LIMIT %s
             FOR UPDATE SKIP LOCKED
             """,
@@ -1442,7 +1463,7 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
             
             cursor.execute(
                 f"""
-                SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value
+                SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value, priority
                 FROM osb_products
                 WHERE product_id IN ({placeholders})
                 """,
@@ -1496,7 +1517,7 @@ def get_product_ids_in_boundary(start_sales, start_id, end_sales, end_id):
             SELECT product_id 
             FROM osb_products 
             WHERE {" AND ".join(clauses)}
-            ORDER BY mfr_sales_30d DESC, product_id ASC
+            ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
         """
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -1585,7 +1606,7 @@ def claim_specific_products_from_db(product_ids, worker_id=None, limit=30, ttl_m
             WHERE product_id IN ({placeholders_in})
               AND scraping_status = %s 
               AND status = 1
-            ORDER BY mfr_sales_30d DESC, product_id ASC
+            ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
             LIMIT %s
             FOR UPDATE SKIP LOCKED
             """,
@@ -1610,7 +1631,7 @@ def claim_specific_products_from_db(product_ids, worker_id=None, limit=30, ttl_m
 
             cursor.execute(
                 f"""
-                SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value
+                SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value, priority
                 FROM osb_products
                 WHERE product_id IN ({placeholders_picked})
                 """,
@@ -1644,10 +1665,10 @@ def get_pending_chunk_from_db(limit, offset):
         create_tables_if_needed()
         # Fetch only the assigned chunk's slice, ordered by sales descending
         query = """
-            SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value
+            SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value, priority
             FROM osb_products 
             WHERE scraping_status = 'pending' AND status = 1
-            ORDER BY mfr_sales_30d DESC, product_id ASC
+            ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
             LIMIT %s OFFSET %s
         """
         df = pd.read_sql(query, conn, params=(int(limit), int(offset)))
