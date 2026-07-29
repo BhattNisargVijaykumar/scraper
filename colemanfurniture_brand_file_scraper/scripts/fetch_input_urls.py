@@ -230,7 +230,8 @@ def fetch_from_direct(urls_str: str, urls_file: str = "") -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch product URLs from FTP, Sitemap, API, or Direct inputs")
-    parser.add_argument("--source-type", default="api", choices=["ftp", "sitemap", "api", "direct", "urls"],
+    parser.add_argument("--source-type", default="api", type=str.lower,
+                        choices=["ftp", "sitemap", "api", "direct", "urls", "direct urls"],
                         help="Input source type for URL collection (ftp, sitemap, api, direct)")
     
     # FTP args
@@ -281,7 +282,7 @@ def main():
             end_page=args.end_page,
             output_dir=args.temp_dir
         )
-    elif source in ["direct", "urls"]:
+    elif source in ["direct", "urls", "direct urls"]:
         urls = fetch_from_direct(urls_str=args.urls, urls_file=args.urls_file)
     else:
         raise ValueError(f"Unsupported source_type: {args.source_type}")
