@@ -1466,6 +1466,7 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
                 SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value, priority
                 FROM osb_products
                 WHERE product_id IN ({placeholders})
+                ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
                 """,
                 tuple(picked_ids)
             )
@@ -1634,6 +1635,7 @@ def claim_specific_products_from_db(product_ids, worker_id=None, limit=30, ttl_m
                 SELECT product_id, web_id, name, sku AS mpn_sku, gtin, brand, product_type AS category, keyword, url, osb_url, status, mfr_sales_30d AS `30daymfrsales`, scraping_status, claimed_by, claimed_at, last_attempt, error_message, created_at, updated_at, color, bed_size_measure, mattress_size, grouping_attr_1_value, grouping_attr_2_value, priority
                 FROM osb_products
                 WHERE product_id IN ({placeholders_picked})
+                ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
                 """,
                 tuple(picked_ids)
             )
