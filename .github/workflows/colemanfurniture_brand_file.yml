@@ -14,34 +14,9 @@ on:
           - "Sitemap"
           - "Direct URLs"
       ftp_filename:
-        description: "CSV filename on FTP server (optional, leave blank for auto-detect in /scrap/)"
+        description: "CSV path on FTP server (e.g., input_urls/coleman FTP urls.csv or emma-mason.csv)"
         required: false
         default: ""
-        type: string
-      ftp_host:
-        description: "FTP Hostname"
-        required: false
-        default: "ftp-sandbox.1sb.pp.ua"
-        type: string
-      ftp_port:
-        description: "FTP Port"
-        required: false
-        default: "21"
-        type: string
-      ftp_user:
-        description: "FTP Username"
-        required: false
-        default: "onestop_ftp-sandbox"
-        type: string
-      ftp_pass:
-        description: "FTP Password"
-        required: false
-        default: "OneStop123"
-        type: string
-      ftp_path:
-        description: "FTP remote path"
-        required: false
-        default: "/scrap/"
         type: string
       base_api:
         description: "Base API URL endpoint (for API mode)"
@@ -93,11 +68,11 @@ permissions:
 env:
   WEBSITE_URL:      "https://colemanfurniture.com"
   SOURCE_TYPE:      ${{ github.event.inputs.source_type }}
-  FTP_HOST:         ${{ github.event.inputs.ftp_host }}
-  FTP_PORT:         ${{ github.event.inputs.ftp_port }}
-  FTP_USER:         ${{ github.event.inputs.ftp_user }}
-  FTP_PASS:         ${{ github.event.inputs.ftp_pass }}
-  FTP_PATH:         ${{ github.event.inputs.ftp_path }}
+  FTP_HOST:         ${{ secrets.FTP_HOST || 'ftp-sandbox.1sb.pp.ua' }}
+  FTP_PORT:         ${{ secrets.FTP_PORT || '21' }}
+  FTP_USER:         ${{ secrets.FTP_USER || 'onestop_ftp-sandbox' }}
+  FTP_PASS:         ${{ secrets.FTP_PASS || 'OneStop123' }}
+  FTP_PATH:         ${{ secrets.FTP_PATH || '/scrap/' }}
   FTP_FILENAME:     ${{ github.event.inputs.ftp_filename }}
   BASE_API:         ${{ github.event.inputs.base_api }}
   START_PAGE:       ${{ github.event.inputs.start_page }}
@@ -175,24 +150,14 @@ jobs:
             echo "=== INITIAL MODE (round $ROUND) ==="
             echo "Collecting URLs for Source Type: ${{ env.SOURCE_TYPE }}"
             mkdir -p remaining_input
-            
-            # Map workflow dispatch defaults to secrets if available
-            FTP_H="${FTP_HOST:-${{ secrets.FTP_HOST }}}"
-            FTP_U="${FTP_USER:-${{ secrets.FTP_USER }}}"
-            FTP_P="${FTP_PASS:-${{ secrets.FTP_PASS }}}"
-            FTP_DIR="${FTP_PATH:-${{ secrets.FTP_PATH }}}"
-            [ -z "$FTP_H" ] && FTP_H="ftp-sandbox.1sb.pp.ua"
-            [ -z "$FTP_U" ] && FTP_U="onestop_ftp-sandbox"
-            [ -z "$FTP_P" ] && FTP_P="OneStop123"
-            [ -z "$FTP_DIR" ] && FTP_DIR="/scrap/"
 
             python colemanfurniture_brand_file_scraper/scripts/fetch_input_urls.py \
               --source-type "${{ env.SOURCE_TYPE }}" \
-              --ftp-host "$FTP_H" \
+              --ftp-host "${{ env.FTP_HOST }}" \
               --ftp-port "${{ env.FTP_PORT }}" \
-              --ftp-user "$FTP_U" \
-              --ftp-pass "$FTP_P" \
-              --ftp-path "$FTP_DIR" \
+              --ftp-user "${{ env.FTP_USER }}" \
+              --ftp-pass "${{ env.FTP_PASS }}" \
+              --ftp-path "${{ env.FTP_PATH }}" \
               --ftp-filename "${{ env.FTP_FILENAME }}" \
               --sitemap-url "${{ env.SITEMAP_URL }}" \
               --base-api "${{ env.BASE_API }}" \
@@ -487,10 +452,10 @@ jobs:
       - name: Upload to FTP server
         if: success()
         env:
-          FTP_HOST:     ${{ github.event.inputs.ftp_host || secrets.FTP_HOST }}
-          FTP_USER:     ${{ github.event.inputs.ftp_user || secrets.FTP_USER }}
-          FTP_PASS:     ${{ github.event.inputs.ftp_pass || secrets.FTP_PASS }}
-          FTP_BASE_DIR: ${{ github.event.inputs.ftp_path || secrets.FTP_PATH }}
+          FTP_HOST:     ${{ env.FTP_HOST }}
+          FTP_USER:     ${{ env.FTP_USER }}
+          FTP_PASS:     ${{ env.FTP_PASS }}
+          FTP_BASE_DIR: ${{ env.FTP_PATH }}
           FILE:         ${{ steps.meta.outputs.name }}
         run: |
           if [ -z "$FTP_HOST" ]; then exit 0; fi
@@ -545,11 +510,6 @@ jobs:
             --repo "${{ github.repository }}" \
             --ref "${{ github.ref_name }}" \
             --field source_type="${{ env.SOURCE_TYPE }}" \
-            --field ftp_host="${{ env.FTP_HOST }}" \
-            --field ftp_port="${{ env.FTP_PORT }}" \
-            --field ftp_user="${{ env.FTP_USER }}" \
-            --field ftp_pass="${{ env.FTP_PASS }}" \
-            --field ftp_path="${{ env.FTP_PATH }}" \
             --field ftp_filename="${{ env.FTP_FILENAME }}" \
             --field base_api="${{ env.BASE_API }}" \
             --field start_page="${{ env.START_PAGE }}" \
