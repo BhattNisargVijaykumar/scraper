@@ -59,6 +59,11 @@ on:
         required: false
         default: "true"
         type: string
+      use_free_proxies:
+        description: "Fetch and rotate free public proxies to bypass IP captcha blocks"
+        required: true
+        default: "false"
+        type: string
 
 permissions:
   contents: read
@@ -205,6 +210,12 @@ jobs:
             TOTAL_WORKERS="${{ github.event.inputs.total_chunks || 40 }}"
           fi
 
+          if [ "${{ github.event.inputs.use_free_proxies }}" = "true" ]; then
+            USE_PROXIES_FLAG="--use-free-proxies"
+          else
+            USE_PROXIES_FLAG=""
+          fi
+
           python -u gshopping/gscraper_pg.py \
             --chunk-id ${{ matrix.worker_index }} \
             --total-chunks "$TOTAL_WORKERS" \
@@ -212,7 +223,8 @@ jobs:
             --max-runtime-hours "$MAX_RUNTIME_HOURS" \
             --worker-id "$SCRAPER_WORKER_ID" \
             --product-ids "$PRODUCT_IDS" \
-            --total-accounts "${{ github.event.inputs.total_accounts || '8' }}"
+            --total-accounts "${{ github.event.inputs.total_accounts || '8' }}" \
+            $USE_PROXIES_FLAG
 
   dispatch_next_round:
     needs: scrape
@@ -316,6 +328,7 @@ jobs:
             const maxRuntimeHours = '${{ github.event.inputs.max_runtime_hours || '5.5' }}';
             const claimLimit = '${{ github.event.inputs.claim_limit }}';
             const runResolveRedirects = '${{ github.event.inputs.run_resolve_redirects || 'true' }}';
+            const useFreeProxies = '${{ github.event.inputs.use_free_proxies || 'false' }}';
 
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -331,7 +344,8 @@ jobs:
                 run_depth: String(nextDepth),
                 max_depth: maxDepth,
                 reset_errors: 'false',
-                run_resolve_redirects: runResolveRedirects
+                run_resolve_redirects: runResolveRedirects,
+                use_free_proxies: useFreeProxies
               },
             });
 
