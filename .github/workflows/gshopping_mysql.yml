@@ -33,6 +33,11 @@ on:
         required: true
         default: "40"
         type: string
+      total_accounts:
+        description: "Total number of GitHub accounts used for scraping"
+        required: true
+        default: "8"
+        type: string
       products_per_hour:
         description: "Expected products per worker per hour"
         required: true
@@ -229,7 +234,8 @@ jobs:
             --start-id "${{ github.event.inputs.start_id }}" \
             --end-sales "${{ github.event.inputs.end_sales }}" \
             --end-id "${{ github.event.inputs.end_id }}" \
-            --product-ids "$PRODUCT_IDS"
+            --product-ids "$PRODUCT_IDS" \
+            --total-accounts "${{ github.event.inputs.total_accounts || '8' }}"
 
   dispatch_next_round:
     needs: scrape
@@ -348,6 +354,7 @@ jobs:
             const runDepth = Number('${{ github.event.inputs.run_depth || '1' }}');
             const nextDepth = runDepth + 1;
             const totalChunks = '${{ github.event.inputs.total_chunks || '40' }}';
+            const totalAccounts = '${{ github.event.inputs.total_accounts || '8' }}';
             const maxDepth = '${{ github.event.inputs.max_depth || '50' }}';
             const productsPerHour = '${{ github.event.inputs.products_per_hour || '50' }}';
             const maxRuntimeHours = '${{ github.event.inputs.max_runtime_hours || '5.5' }}';
@@ -365,6 +372,7 @@ jobs:
               ref: 'refs/heads/main',
               inputs: {
                 total_chunks: totalChunks,
+                total_accounts: totalAccounts,
                 products_per_hour: productsPerHour,
                 max_runtime_hours: maxRuntimeHours,
                 claim_limit: claimLimit,
