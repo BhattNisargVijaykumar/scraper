@@ -1285,6 +1285,11 @@ def get_pending_count_from_db():
         conn = pymysql.connect(host=mysql_host, port=mysql_port, user=mysql_user, password=mysql_pass, database=mysql_db)
         cursor = conn.cursor()
         create_tables_if_needed()
+        cursor.execute("SELECT COUNT(*) FROM osb_products WHERE scraping_status = 'pending' AND status = 1 AND priority > 0")
+        priority_count = cursor.fetchone()[0]
+        if priority_count > 0:
+            return priority_count
+
         cursor.execute("SELECT COUNT(*) FROM osb_products WHERE scraping_status = 'pending' AND status = 1")
         count = cursor.fetchone()[0]
         return count
@@ -1432,12 +1437,23 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
             conn.rollback()
             return pd.DataFrame()
 
-        # Atomic SELECT then UPDATE pattern for MySQL with retry queue ordering
+        # Check if there are pending priority products globally
         cursor.execute(
-            """
+            "SELECT COUNT(*) FROM osb_products WHERE status = 1 AND scraping_status = %s AND priority > 0 AND retry_count < 3",
+            (PENDING_STATUS,)
+        )
+        has_priority = cursor.fetchone()[0] > 0
+
+        # Atomic SELECT then UPDATE pattern for MySQL with retry queue ordering
+        where_clause = "status = 1 AND scraping_status = %s AND retry_count < 3"
+        if has_priority:
+            where_clause += " AND priority > 0"
+
+        cursor.execute(
+            f"""
             SELECT product_id
             FROM osb_products
-            WHERE status = 1 AND scraping_status = %s AND retry_count < 3
+            WHERE {where_clause}
             ORDER BY priority DESC, retry_count ASC, COALESCE(mfr_sales_30d, 0) DESC, product_id ASC
             LIMIT %s
             FOR UPDATE SKIP LOCKED
@@ -1514,6 +1530,18 @@ def get_product_ids_in_boundary(start_sales, start_id, end_sales, end_id):
             params.extend([sales_val, sales_val, str(end_id)])
             clauses.append("(COALESCE(mfr_sales_30d, 0) > %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id <= %s))")
             
+        # Check if there are active pending priority products in this boundary
+        check_clauses = clauses + ["scraping_status = 'pending'", "priority > 0"]
+        check_query = f"SELECT COUNT(*) FROM osb_products WHERE {' AND '.join(check_clauses)}"
+        cursor.execute(check_query, params)
+        has_priority_pending = cursor.fetchone()[0] > 0
+
+        # Filter the partition query based on priority availability
+        if has_priority_pending:
+            clauses.append("priority > 0")
+        else:
+            clauses.append("(priority = 0 OR priority IS NULL)")
+
         query = f"""
             SELECT product_id 
             FROM osb_products 
@@ -1526,6 +1554,54 @@ def get_product_ids_in_boundary(start_sales, start_id, end_sales, end_id):
     except Exception as e:
         print(f"Error fetching product IDs in boundary: {e}")
         return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def get_pending_count_in_boundary(start_sales, start_id, end_sales, end_id):
+    """Fetch count of pending active products inside the boundary."""
+    conn = None
+    cursor = None
+    try:
+        conn = _get_pg_conn()
+        cursor = conn.cursor()
+        create_tables_if_needed()
+        
+        params = []
+        clauses = ["status = 1", "scraping_status = 'pending'"]
+        if start_id:
+            sales_val = int(start_sales) if (start_sales is not None and start_sales != '') else 0
+            params.extend([sales_val, sales_val, str(start_id)])
+            clauses.append("(COALESCE(mfr_sales_30d, 0) < %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id >= %s))")
+        if end_id:
+            sales_val = int(end_sales) if (end_sales is not None and end_sales != '') else 0
+            params.extend([sales_val, sales_val, str(end_id)])
+            clauses.append("(COALESCE(mfr_sales_30d, 0) > %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id <= %s))")
+            
+        # Check if there are active pending priority products in this boundary
+        clauses_priority = clauses + ["priority > 0"]
+        query_priority = f"""
+            SELECT COUNT(*) 
+            FROM osb_products 
+            WHERE {" AND ".join(clauses_priority)}
+        """
+        cursor.execute(query_priority, params)
+        priority_count = cursor.fetchone()[0]
+        if priority_count > 0:
+            return priority_count
+
+        query = f"""
+            SELECT COUNT(*) 
+            FROM osb_products 
+            WHERE {" AND ".join(clauses)}
+        """
+        cursor.execute(query, params)
+        return cursor.fetchone()[0]
+    except Exception as e:
+        print(f"Error fetching pending count in boundary: {e}")
+        return 0
     finally:
         if cursor:
             cursor.close()
@@ -4969,6 +5045,7 @@ def main():
     parser.add_argument('--end-sales', type=str, default=None, help='End sales boundary for this account partition')
     parser.add_argument('--end-id', type=str, default=None, help='End product ID boundary for this account partition')
     parser.add_argument('--product-ids', type=str, default=None, help='Comma-separated list of product IDs to scrape directly')
+    parser.add_argument('--total-accounts', type=int, default=8, help='Total number of GitHub accounts used for scraping')
     
     args = parser.parse_args()
     args.claim_limit = int(args.claim_limit) if args.claim_limit is not None else None
@@ -4976,11 +5053,26 @@ def main():
         args.claim_ttl_minutes = max(DEFAULT_CLAIM_TTL_MINUTES, int(math.ceil(args.max_runtime_hours * 60)) + 120)
     else:
         args.claim_ttl_minutes = int(args.claim_ttl_minutes)
-    effective_claim_limit = calculate_parallel_claim_limit(
-        claim_limit=args.claim_limit,
-        products_per_hour=args.products_per_hour,
-        max_runtime_hours=args.max_runtime_hours,
-    )
+
+    # Dynamic calculation of effective claim limit if no explicit claim limit is provided
+    if args.claim_limit is None:
+        if args.start_id or args.end_id:
+            pending_in_boundary = get_pending_count_in_boundary(args.start_sales, args.start_id, args.end_sales, args.end_id)
+            calculated_limit = pending_in_boundary // args.total_chunks
+            print(f"Dynamic claim limit based on boundary count: {pending_in_boundary} pending / {args.total_chunks} chunks = {calculated_limit}")
+        else:
+            total_pending = get_pending_count_from_db()
+            calculated_limit = total_pending // (args.total_accounts * args.total_chunks)
+            print(f"Dynamic claim limit based on global count: {total_pending} pending / ({args.total_accounts} accounts * {args.total_chunks} chunks) = {calculated_limit}")
+        
+        # Apply safety cap (products_per_hour * max_runtime_hours)
+        max_capability = int(args.products_per_hour * args.max_runtime_hours)
+        effective_claim_limit = max(1, min(calculated_limit, max_capability))
+        print(f"Effective dynamic claim limit (capped at {max_capability}): {effective_claim_limit}")
+    else:
+        effective_claim_limit = args.claim_limit
+        print(f"Using explicit claim limit: {effective_claim_limit}")
+
     max_runtime_seconds = int(args.max_runtime_hours * 60 * 60)
     
     # Handlers for dedicated utility commands
