@@ -1510,104 +1510,6 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
             except Exception:
                 pass
 
-def get_product_ids_in_boundary(start_sales, start_id, end_sales, end_id):
-    """Fetch all active products (status = 1) in the sorted boundary, regardless of scraping_status."""
-    conn = None
-    cursor = None
-    try:
-        conn = _get_pg_conn()
-        cursor = conn.cursor()
-        create_tables_if_needed()
-        
-        params = []
-        clauses = ["status = 1"]
-        if start_id:
-            sales_val = int(start_sales) if (start_sales is not None and start_sales != '') else 0
-            params.extend([sales_val, sales_val, str(start_id)])
-            clauses.append("(COALESCE(mfr_sales_30d, 0) < %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id >= %s))")
-        if end_id:
-            sales_val = int(end_sales) if (end_sales is not None and end_sales != '') else 0
-            params.extend([sales_val, sales_val, str(end_id)])
-            clauses.append("(COALESCE(mfr_sales_30d, 0) > %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id <= %s))")
-            
-        # Check if there are active pending priority products in this boundary
-        check_clauses = clauses + ["scraping_status = 'pending'", "priority > 0"]
-        check_query = f"SELECT COUNT(*) FROM osb_products WHERE {' AND '.join(check_clauses)}"
-        cursor.execute(check_query, params)
-        has_priority_pending = cursor.fetchone()[0] > 0
-
-        # Filter the partition query based on priority availability
-        if has_priority_pending:
-            clauses.append("priority > 0")
-        else:
-            clauses.append("(priority = 0 OR priority IS NULL)")
-
-        query = f"""
-            SELECT product_id 
-            FROM osb_products 
-            WHERE {" AND ".join(clauses)}
-            ORDER BY priority DESC, mfr_sales_30d DESC, product_id ASC
-        """
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        return [r[0] for r in rows]
-    except Exception as e:
-        print(f"Error fetching product IDs in boundary: {e}")
-        return []
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-def get_pending_count_in_boundary(start_sales, start_id, end_sales, end_id):
-    """Fetch count of pending active products inside the boundary."""
-    conn = None
-    cursor = None
-    try:
-        conn = _get_pg_conn()
-        cursor = conn.cursor()
-        create_tables_if_needed()
-        
-        params = []
-        clauses = ["status = 1", "scraping_status = 'pending'"]
-        if start_id:
-            sales_val = int(start_sales) if (start_sales is not None and start_sales != '') else 0
-            params.extend([sales_val, sales_val, str(start_id)])
-            clauses.append("(COALESCE(mfr_sales_30d, 0) < %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id >= %s))")
-        if end_id:
-            sales_val = int(end_sales) if (end_sales is not None and end_sales != '') else 0
-            params.extend([sales_val, sales_val, str(end_id)])
-            clauses.append("(COALESCE(mfr_sales_30d, 0) > %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id <= %s))")
-            
-        # Check if there are active pending priority products in this boundary
-        clauses_priority = clauses + ["priority > 0"]
-        query_priority = f"""
-            SELECT COUNT(*) 
-            FROM osb_products 
-            WHERE {" AND ".join(clauses_priority)}
-        """
-        cursor.execute(query_priority, params)
-        priority_count = cursor.fetchone()[0]
-        if priority_count > 0:
-            return priority_count
-
-        query = f"""
-            SELECT COUNT(*) 
-            FROM osb_products 
-            WHERE {" AND ".join(clauses)}
-        """
-        cursor.execute(query, params)
-        return cursor.fetchone()[0]
-    except Exception as e:
-        print(f"Error fetching pending count in boundary: {e}")
-        return 0
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
 def claim_specific_products_from_db(product_ids, worker_id=None, limit=30, ttl_minutes=60):
     """Claim only from the pre-selected static list of product IDs."""
     if not product_ids:
@@ -5045,10 +4947,6 @@ def main():
     parser.add_argument('--claim-ttl-minutes', type=int, default=_env_int("CLAIM_TTL_MINUTES", None), help='Release claims older than this TTL')
     parser.add_argument('--worker-id', type=str, default=os.environ.get("SCRAPER_WORKER_ID", None), help='Worker identifier stored in DB claims')
     parser.add_argument('--max-workers', type=int, default=_env_int("MAX_WORKERS", 2), help='Number of parallel worker threads inside this chunk (default: 1, sequential)')
-    parser.add_argument('--start-sales', type=str, default=None, help='Start sales boundary for this account partition')
-    parser.add_argument('--start-id', type=str, default=None, help='Start product ID boundary for this account partition')
-    parser.add_argument('--end-sales', type=str, default=None, help='End sales boundary for this account partition')
-    parser.add_argument('--end-id', type=str, default=None, help='End product ID boundary for this account partition')
     parser.add_argument('--product-ids', type=str, default=None, help='Comma-separated list of product IDs to scrape directly')
     parser.add_argument('--total-accounts', type=int, default=8, help='Total number of GitHub accounts used for scraping')
     
@@ -5061,14 +4959,9 @@ def main():
 
     # Dynamic calculation of effective claim limit if no explicit claim limit is provided
     if args.claim_limit is None:
-        if args.start_id or args.end_id:
-            pending_in_boundary = get_pending_count_in_boundary(args.start_sales, args.start_id, args.end_sales, args.end_id)
-            calculated_limit = pending_in_boundary // args.total_chunks
-            print(f"Dynamic claim limit based on boundary count: {pending_in_boundary} pending / {args.total_chunks} chunks = {calculated_limit}")
-        else:
-            total_pending = get_pending_count_from_db()
-            calculated_limit = total_pending // (args.total_accounts * args.total_chunks)
-            print(f"Dynamic claim limit based on global count: {total_pending} pending / ({args.total_accounts} accounts * {args.total_chunks} chunks) = {calculated_limit}")
+        total_pending = get_pending_count_from_db()
+        calculated_limit = total_pending // (args.total_accounts * args.total_chunks)
+        print(f"Dynamic claim limit based on global count: {total_pending} pending / ({args.total_accounts} accounts * {args.total_chunks} chunks) = {calculated_limit}")
         
         # Apply safety cap (products_per_hour * max_runtime_hours)
         max_capability = int(args.products_per_hour * args.max_runtime_hours)
@@ -5117,29 +5010,6 @@ def main():
                 worker_product_ids, 
                 worker_id=args.worker_id, 
                 limit=len(worker_product_ids), 
-                ttl_minutes=args.claim_ttl_minutes
-            )
-        elif args.start_id or args.end_id:
-            print(f"Boundary partition mode: start=({args.start_sales}, {args.start_id}) end=({args.end_sales}, {args.end_id})")
-            product_ids = get_product_ids_in_boundary(args.start_sales, args.start_id, args.end_sales, args.end_id)
-            M = len(product_ids)
-            print(f"Total products in account boundary: {M}")
-            if M == 0:
-                print("No products in boundary. Exiting.")
-                sys.exit(0)
-                
-            base_rows = M // args.total_chunks
-            remainder = M % args.total_chunks
-            limit = base_rows + (1 if args.chunk_id <= remainder else 0)
-            offset = (args.chunk_id - 1) * base_rows + min(args.chunk_id - 1, remainder)
-            
-            worker_product_ids = product_ids[offset : offset + limit]
-            print(f"Worker chunk {args.chunk_id} of {args.total_chunks}: Slice size={len(worker_product_ids)} (Offset={offset}, Limit={limit})")
-            
-            chunk_df = claim_specific_products_from_db(
-                worker_product_ids, 
-                worker_id=args.worker_id, 
-                limit=effective_claim_limit, 
                 ttl_minutes=args.claim_ttl_minutes
             )
         else:
