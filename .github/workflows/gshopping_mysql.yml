@@ -8,26 +8,7 @@ on:
         required: false
         default: ""
         type: string
-      start_sales:
-        description: "Start sales boundary for this account partition"
-        required: false
-        default: ""
-        type: string
-      start_id:
-        description: "Start product ID boundary for this account partition"
-        required: false
-        default: ""
-        type: string
-      end_sales:
-        description: "End sales boundary for this account partition"
-        required: false
-        default: ""
-        type: string
-      end_id:
-        description: "End product ID boundary for this account partition"
-        required: false
-        default: ""
-        type: string
+
       total_chunks:
         description: "Parallel workers to run in this account"
         required: true
@@ -230,10 +211,6 @@ jobs:
             --products-per-hour "$PRODUCTS_PER_HOUR" \
             --max-runtime-hours "$MAX_RUNTIME_HOURS" \
             --worker-id "$SCRAPER_WORKER_ID" \
-            --start-sales "${{ github.event.inputs.start_sales }}" \
-            --start-id "${{ github.event.inputs.start_id }}" \
-            --end-sales "${{ github.event.inputs.end_sales }}" \
-            --end-id "${{ github.event.inputs.end_id }}" \
             --product-ids "$PRODUCT_IDS" \
             --total-accounts "${{ github.event.inputs.total_accounts || '8' }}"
 
@@ -260,14 +237,12 @@ jobs:
           MYSQL_USER: ${{ secrets.MYSQL_USER }}
           MYSQL_PASS: ${{ secrets.MYSQL_PASS }}
           MYSQL_DB: ${{ secrets.MYSQL_DB }}
-          START_SALES: ${{ github.event.inputs.start_sales }}
-          START_ID: ${{ github.event.inputs.start_id }}
-          END_SALES: ${{ github.event.inputs.end_sales }}
-          END_ID: ${{ github.event.inputs.end_id }}
         run: |
           python - <<'PY'
           import os
           import pymysql
+          import time
+          import random
           
           try:
               mysql_host = os.environ.get("MYSQL_HOST")
@@ -280,13 +255,6 @@ jobs:
               mysql_pass = os.environ.get("MYSQL_PASS")
               mysql_db = os.environ.get("MYSQL_DB")
               
-              start_sales = os.environ.get("START_SALES", "").strip()
-              start_id = os.environ.get("START_ID", "").strip()
-              end_sales = os.environ.get("END_SALES", "").strip()
-              end_id = os.environ.get("END_ID", "").strip()
-              
-              import time
-              import random
               conn = None
               max_retries = 8
               for attempt in range(1, max_retries + 1):
@@ -305,36 +273,24 @@ jobs:
                       print(f"Connection attempt {attempt} failed: {err}")
                       if attempt == max_retries:
                           raise
-                      # Exponential backoff with random jitter
                       sleep_time = (2 ** attempt) + random.uniform(0.5, 1.5)
                       time.sleep(sleep_time)
               
               cursor = conn.cursor()
-              params = []
-              clauses = ["status = 1", "scraping_status IN ('pending', 'claimed')"]
-              if start_id:
-                  sales_val = int(start_sales) if start_sales else 0
-                  params.extend([sales_val, sales_val, start_id])
-                  clauses.append("(COALESCE(mfr_sales_30d, 0) < %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id >= %s))")
-              if end_id:
-                  sales_val = int(end_sales) if end_sales else 0
-                  params.extend([sales_val, sales_val, end_id])
-                  clauses.append("(COALESCE(mfr_sales_30d, 0) > %s OR (COALESCE(mfr_sales_30d, 0) = %s AND product_id <= %s))")
-              
-              query = f"""
+              query = """
                   SELECT
                       COALESCE(SUM(CASE WHEN scraping_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
                       COALESCE(SUM(CASE WHEN scraping_status = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed_count
                   FROM osb_products
-                  WHERE {" AND ".join(clauses)}
+                  WHERE status = 1
               """
-              cursor.execute(query, tuple(params))
+              cursor.execute(query)
               pending_count, claimed_count = cursor.fetchone()
               cursor.close()
               conn.close()
               
-              print(f"Pending products in boundary: {pending_count}")
-              print(f"Claimed/in-progress products in boundary: {claimed_count}")
+              print(f"Pending products globally: {pending_count}")
+              print(f"Claimed/in-progress products globally: {claimed_count}")
               
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f"pending_count={pending_count}\n")
@@ -359,10 +315,6 @@ jobs:
             const productsPerHour = '${{ github.event.inputs.products_per_hour || '50' }}';
             const maxRuntimeHours = '${{ github.event.inputs.max_runtime_hours || '5.5' }}';
             const claimLimit = '${{ github.event.inputs.claim_limit }}';
-            const startSales = '${{ github.event.inputs.start_sales }}';
-            const startId = '${{ github.event.inputs.start_id }}';
-            const endSales = '${{ github.event.inputs.end_sales }}';
-            const endId = '${{ github.event.inputs.end_id }}';
             const runResolveRedirects = '${{ github.event.inputs.run_resolve_redirects || 'true' }}';
 
             await github.rest.actions.createWorkflowDispatch({
@@ -379,11 +331,7 @@ jobs:
                 run_depth: String(nextDepth),
                 max_depth: maxDepth,
                 reset_errors: 'false',
-                run_resolve_redirects: runResolveRedirects,
-                start_sales: startSales,
-                start_id: startId,
-                end_sales: endSales,
-                end_id: endId
+                run_resolve_redirects: runResolveRedirects
               },
             });
 
