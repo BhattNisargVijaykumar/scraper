@@ -297,8 +297,10 @@ jobs:
                   f.write(f"claimed_count={claimed_count}\n")
           except Exception as e:
               print(f"Error checking DB: {e}")
-              import sys
-              sys.exit(1)
+              print("⚠️ Database connection failed. Assuming pending products exist to prevent pipeline halts.")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("pending_count=1\n")
+                  f.write("claimed_count=0\n")
           PY
 
       - name: Trigger next round workflow
