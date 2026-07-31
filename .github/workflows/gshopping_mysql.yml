@@ -336,7 +336,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'gshopping_mysql.yml',
-              ref: 'refs/heads/main',
+              ref: context.ref,
               inputs: {
                 total_chunks: totalChunks,
                 total_accounts: totalAccounts,
