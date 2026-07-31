@@ -1458,7 +1458,7 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
             SELECT product_id
             FROM osb_products
             WHERE {where_clause}
-            ORDER BY priority DESC, retry_count ASC, COALESCE(mfr_sales_30d, 0) DESC, product_id ASC
+            ORDER BY priority DESC, retry_count ASC, mfr_sales_30d DESC, product_id ASC
             LIMIT %s
             FOR UPDATE SKIP LOCKED
             """,
