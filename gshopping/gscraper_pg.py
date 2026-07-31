@@ -1042,10 +1042,19 @@ def insert_to_postgres(product_results, seller_results):
                 if p_id is None:
                     continue
                 status_lower = str(r.get("status", "")).strip().lower()
-                
+                prod_url = str(r.get("product_url", "") or "").strip()
+                is_valid_google_url = (
+                    prod_url.startswith("https://www.google.com/search?ibp=oshop") or
+                    prod_url.startswith("https://share.google/")
+                )
+
                 if str(p_id) in retry_product_ids or p_id in retry_product_ids:
                     scr_status = 'pending'
                     err_msg = 'Invalid product URL, retrying'
+                    is_error = False
+                elif status_lower in ('completed', 'product_found') and not is_valid_google_url and status_lower not in ('no_products', 'no_match'):
+                    scr_status = 'pending'
+                    err_msg = 'Invalid Google Shopping URL (kept pending)'
                     is_error = False
                 elif status_lower == 'completed' or status_lower == 'product_found':
                     scr_status = 'completed'
@@ -1061,7 +1070,7 @@ def insert_to_postgres(product_results, seller_results):
                     if is_error:
                         cursor.execute("""
                             UPDATE osb_products
-                            SET scraping_status = CASE WHEN retry_count + 1 >= 3 THEN 'error' ELSE 'pending' END,
+                            SET scraping_status = 'pending',
                                 retry_count = retry_count + 1,
                                 last_attempt = CURRENT_TIMESTAMP(),
                                 error_message = %s,
@@ -1083,7 +1092,7 @@ def insert_to_postgres(product_results, seller_results):
                     if is_error:
                         cursor.execute("""
                             UPDATE osb_products
-                            SET scraping_status = CASE WHEN retry_count + 1 >= 3 THEN 'error' ELSE 'pending' END,
+                            SET scraping_status = 'pending',
                                 retry_count = retry_count + 1,
                                 last_attempt = CURRENT_TIMESTAMP(),
                                 error_message = %s
@@ -1443,24 +1452,29 @@ def claim_pending_products_from_db(limit=30, worker_id=None, ttl_minutes=60):
 
         # Check if there are pending priority products globally
         cursor.execute(
-            "SELECT COUNT(*) FROM osb_products WHERE status = 1 AND scraping_status = %s AND priority > 0 AND retry_count < 3",
+            "SELECT COUNT(*) FROM osb_products WHERE status = 1 AND scraping_status = %s AND priority > 0",
             (PENDING_STATUS,)
         )
         has_priority = cursor.fetchone()[0] > 0
 
         # Atomic SELECT then UPDATE pattern for MySQL with retry queue ordering
-        where_clause = "status = 1 AND scraping_status = %s AND retry_count < 3"
+        where_clause = "p.status = 1 AND p.scraping_status = %s"
         if has_priority:
-            where_clause += " AND priority > 0"
+            where_clause += " AND p.priority > 0"
 
         cursor.execute(
             f"""
-            SELECT product_id
-            FROM osb_products
+            SELECT p.product_id
+            FROM osb_products p
+            LEFT JOIN google_shopping_results r ON p.product_id = r.product_id AND r.card_index = 0
             WHERE {where_clause}
-            ORDER BY priority DESC, retry_count ASC, mfr_sales_30d DESC, product_id ASC
+            ORDER BY p.priority DESC, 
+                     CASE WHEN r.google_seller_page_url IS NULL OR r.google_seller_page_url = '' THEN 0 ELSE 1 END ASC,
+                     p.retry_count ASC, 
+                     p.mfr_sales_30d DESC, 
+                     p.product_id ASC
             LIMIT %s
-            FOR UPDATE SKIP LOCKED
+            FOR UPDATE OF p SKIP LOCKED
             """,
             (PENDING_STATUS, int(limit))
         )
@@ -1826,7 +1840,7 @@ def release_claimed_products(product_ids, worker_id=None, reason="not_processed"
             cursor.execute(
                 f"""
                 UPDATE osb_products
-                SET scraping_status = CASE WHEN retry_count + 1 >= 3 THEN 'error' ELSE 'pending' END,
+                SET scraping_status = 'pending',
                     retry_count = retry_count + 1,
                     claimed_by = NULL,
                     claimed_at = NULL,
