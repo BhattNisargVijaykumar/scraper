@@ -350,3 +350,64 @@ FROM google_shopping_results
 WHERE
     google_seller_page_full_url LIKE "%share.google%"
     AND google_seller_page_full_url IS NULL
+
+UPDATE osb_products
+SET
+    is_osb_url_imported = 1
+WHERE
+    product_id IN (
+        SELECT product_id
+        FROM (
+                SELECT product_id
+                    -- ,
+                    -- google_seller_page_full_url as google_shopping_url
+                FROM google_shopping_results
+                WHERE
+                    google_seller_page_full_url != ''
+                    AND osb_url_match = 'Yes'
+                    AND product_id IN (
+                        SELECT product_id
+                        FROM osb_products
+                        WHERE
+                            is_osb_url_imported = 0
+                    )
+                ORDER BY updated_at DESC
+            ) AS A
+    );
+
+SELECT A.product_id, B.osb_url, A.google_seller_page_full_url as google_shopping_url
+FROM
+    google_shopping_results as A
+    INNER JOIN osb_products as B ON A.product_id = B.product_id
+WHERE
+    A.google_seller_page_full_url != ''
+    AND A.osb_url_match = 'No'
+
+SELECT scraping_status,
+    -- retry_count,
+    COUNT(*) as cnt
+FROM osb_products
+WHERE
+    status = 1
+    AND priority != 0
+GROUP BY
+    -- retry_count,
+    scraping_status
+
+SELECT
+    product_id,
+    google_seller_page_full_url as google_shopping_url
+FROM google_shopping_results
+WHERE
+    COALESCE(
+        google_seller_page_full_url,
+        ''
+    ) != ''
+    AND osb_url_match = 'Yes'
+    AND product_id IN (
+        SELECT product_id
+        FROM osb_products
+        WHERE
+            is_osb_url_imported = 0
+    )
+ORDER BY updated_at DESC
