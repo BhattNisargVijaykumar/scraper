@@ -1038,10 +1038,19 @@ def insert_to_postgres(product_results, seller_results):
                 if p_id is None:
                     continue
                 status_lower = str(r.get("status", "")).strip().lower()
-                
+                prod_url = str(r.get("product_url", "") or "").strip()
+                is_valid_google_url = (
+                    prod_url.startswith("https://www.google.com/search?ibp=oshop") or
+                    prod_url.startswith("https://share.google/")
+                )
+
                 if str(p_id) in retry_product_ids or p_id in retry_product_ids:
                     scr_status = 'pending'
                     err_msg = 'Invalid product URL, retrying'
+                    is_error = False
+                elif status_lower in ('completed', 'product_found') and not is_valid_google_url and status_lower not in ('no_products', 'no_match'):
+                    scr_status = 'pending'
+                    err_msg = 'Invalid Google Shopping URL (kept pending)'
                     is_error = False
                 elif status_lower == 'completed' or status_lower == 'product_found':
                     scr_status = 'completed'
