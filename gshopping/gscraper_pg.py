@@ -4643,6 +4643,15 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                         print(f"[Thread {thread_id}] !!! MAX RUNTIME REACHED. Stopping worker thread.")
                         stop_event.set()
                         break
+
+                    if driver is None:
+                        try:
+                            print(f"[Thread {thread_id}] Spinning up fresh driver for next product...")
+                            driver = setup_driver(max_attempts=3, base_delay=5, use_free_proxies=use_free_proxies)
+                        except Exception as e:
+                            print(f"[Thread {thread_id}] Driver setup failed for chunk {chunk_id} during retry/rotation: {str(e)}")
+                            traceback.print_exc()
+                            break
                         
                     try:
                         index, row = product_queue.get_nowait()
@@ -4751,9 +4760,25 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                         # Release current product back to pending
                         release_claimed_products([product_id], resolved_worker_id, reason="captcha_failed")
                         
-                        print(f"[Thread {thread_id}] !!! CAPTCHA detected and unable to resolve on Product {product_id}. Aborting full batch immediately so GitHub Actions can retry in a separate environment.")
-                        stop_event.set()
-                        break
+                        captcha_failures_map[thread_id] = captcha_failures_map.get(thread_id, 0) + 1
+                        
+                        if use_free_proxies or os.environ.get("USE_FREE_PROXIES", "").lower() == "true":
+                            print(f"[Thread {thread_id}] Captcha failed on Product {product_id} with proxy. Rotating driver and continuing.")
+                            try:
+                                if driver:
+                                    driver.quit()
+                            except Exception:
+                                pass
+                            driver = None
+                            
+                            if captcha_failures_map[thread_id] >= 3:
+                                print(f"[Thread {thread_id}] !!! {captcha_failures_map[thread_id]} consecutive CAPTCHA failures. Aborting batch.")
+                                stop_event.set()
+                                break
+                        else:
+                            print(f"[Thread {thread_id}] !!! CAPTCHA detected and unable to resolve on Product {product_id}. Aborting full batch immediately so GitHub Actions can retry in a separate environment.")
+                            stop_event.set()
+                            break
                     else:
                         # Reset captcha failure counter on any non-captcha result
                         captcha_failures_map[thread_id] = 0
