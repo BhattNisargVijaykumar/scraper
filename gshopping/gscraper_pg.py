@@ -1,4 +1,8 @@
 import sys
+import os
+# Add root folder to sys.path
+sys.path.append(os.path.abspath('.'))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pandas only supports SQLAlchemy connectable.*")
 import json
@@ -162,10 +166,7 @@ def get_site_display_and_is_me(competitor_name, seller_name, seller_url, base_ur
     s_name = str(seller_name).strip() if seller_name else ''
     
     if domain and s_name:
-        if domain.lower() == s_name.lower():
-            display = s_name
-        else:
-            display = f"{domain} — {s_name}"
+        display = f"{domain} — {s_name}"
     else:
         display = s_name or domain or ''
         
@@ -2578,10 +2579,19 @@ def get_chrome_major_version():
         print(f"Error detecting Chrome version: {e}")
     return None
 
-def setup_driver(max_attempts=3, base_delay=4, headless=False):
+def setup_driver(max_attempts=3, base_delay=4, headless=False, use_free_proxies=False):
     last_err = None
     
-    def build_chrome_options():
+    proxy_manager = None
+    if use_free_proxies or os.environ.get("USE_FREE_PROXIES", "").lower() == "true":
+        try:
+            from colemanfurniture_scraper.utils.proxy_manager import ProxyManager
+            proxy_manager = ProxyManager()
+            print("✓ Proxy rotation enabled via ProxyManager")
+        except Exception as p_err:
+            print(f"Warning: Failed to load ProxyManager: {p_err}")
+            
+    def build_chrome_options(proxy_server=None):
         options = uc.ChromeOptions()
         # if headless or os.environ.get("HEADLESS", "").lower() == "true":
         #     options.add_argument("--headless")
@@ -2595,12 +2605,23 @@ def setup_driver(max_attempts=3, base_delay=4, headless=False):
         options.add_argument("--window-size=1366,768")
         options.add_argument("--lang=en-US")
         options.add_argument("--disable-notifications")
+        if proxy_server:
+            options.add_argument(f"--proxy-server={proxy_server}")
         return options
 
     for attempt in range(1, max_attempts + 1):
         driver = None
         try:
-            options = build_chrome_options()
+            proxy_server = None
+            if proxy_manager:
+                try:
+                    proxy_server = proxy_manager.get_proxy_for_google()
+                    if proxy_server:
+                        print(f"✓ Using proxy for driver attempt {attempt}: {proxy_server}")
+                except Exception as g_err:
+                    print(f"Warning: Failed to fetch proxy: {g_err}")
+
+            options = build_chrome_options(proxy_server)
             chrome_bin = os.environ.get("CHROME_BIN")
             chromedriver_bin = os.environ.get("CHROMEDRIVER_BIN")
             
@@ -4511,7 +4532,7 @@ def split_dataframe_to_chunk_files(df, output_dir, total_chunks, prefix):
     return chunk_files
 
 
-def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', worker_id=None, ttl_minutes=60, max_runtime_seconds=None, max_workers=1):
+def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', worker_id=None, ttl_minutes=60, max_runtime_seconds=None, max_workers=1, use_free_proxies=False):
     """Process a chunk of products"""
     try:
         if df is None or df.empty:
@@ -4607,7 +4628,7 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
             thread_id = threading.get_ident()
             driver = None
             try:
-                driver = setup_driver(max_attempts=3, base_delay=5)
+                driver = setup_driver(max_attempts=3, base_delay=5, use_free_proxies=use_free_proxies)
             except Exception as e:
                 print(f"[Thread {thread_id}] Driver setup failed for chunk {chunk_id}: {str(e)}")
                 traceback.print_exc()
@@ -4619,6 +4640,15 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                         print(f"[Thread {thread_id}] !!! MAX RUNTIME REACHED. Stopping worker thread.")
                         stop_event.set()
                         break
+
+                    if driver is None:
+                        try:
+                            print(f"[Thread {thread_id}] Spinning up fresh driver for next product...")
+                            driver = setup_driver(max_attempts=3, base_delay=5, use_free_proxies=use_free_proxies)
+                        except Exception as e:
+                            print(f"[Thread {thread_id}] Driver setup failed for chunk {chunk_id} during retry/rotation: {str(e)}")
+                            traceback.print_exc()
+                            break
                         
                     try:
                         index, row = product_queue.get_nowait()
@@ -4727,9 +4757,25 @@ def process_chunk(df, chunk_id, total_chunks, round_id=1, output_dir='output', w
                         # Release current product back to pending
                         release_claimed_products([product_id], resolved_worker_id, reason="captcha_failed")
                         
-                        print(f"[Thread {thread_id}] !!! CAPTCHA detected and unable to resolve on Product {product_id}. Aborting full batch immediately so GitHub Actions can retry in a separate environment.")
-                        stop_event.set()
-                        break
+                        captcha_failures_map[thread_id] = captcha_failures_map.get(thread_id, 0) + 1
+                        
+                        if use_free_proxies or os.environ.get("USE_FREE_PROXIES", "").lower() == "true":
+                            print(f"[Thread {thread_id}] Captcha failed on Product {product_id} with proxy. Rotating driver and continuing.")
+                            try:
+                                if driver:
+                                    driver.quit()
+                            except Exception:
+                                pass
+                            driver = None
+                            
+                            if captcha_failures_map[thread_id] >= 3:
+                                print(f"[Thread {thread_id}] !!! {captcha_failures_map[thread_id]} consecutive CAPTCHA failures. Aborting batch.")
+                                stop_event.set()
+                                break
+                        else:
+                            print(f"[Thread {thread_id}] !!! CAPTCHA detected and unable to resolve on Product {product_id}. Aborting full batch immediately so GitHub Actions can retry in a separate environment.")
+                            stop_event.set()
+                            break
                     else:
                         # Reset captcha failure counter on any non-captcha result
                         captcha_failures_map[thread_id] = 0
@@ -4963,6 +5009,7 @@ def main():
     parser.add_argument('--max-workers', type=int, default=_env_int("MAX_WORKERS", 2), help='Number of parallel worker threads inside this chunk (default: 1, sequential)')
     parser.add_argument('--product-ids', type=str, default=None, help='Comma-separated list of product IDs to scrape directly')
     parser.add_argument('--total-accounts', type=int, default=8, help='Total number of GitHub accounts used for scraping')
+    parser.add_argument('--use-free-proxies', action='store_true', help='Use free public proxies to scrape Google')
     
     args = parser.parse_args()
     args.claim_limit = int(args.claim_limit) if args.claim_limit is not None else None
@@ -5045,6 +5092,7 @@ def main():
             ttl_minutes=args.claim_ttl_minutes,
             max_runtime_seconds=max_runtime_seconds,
             max_workers=args.max_workers,
+            use_free_proxies=args.use_free_proxies,
         )
         success = chunk_result.get("success", False)
         sys.exit(0 if success else 1)
@@ -5084,6 +5132,7 @@ def main():
         ttl_minutes=args.claim_ttl_minutes,
         max_runtime_seconds=max_runtime_seconds,
         max_workers=args.max_workers,
+        use_free_proxies=args.use_free_proxies,
     )
     success = chunk_result.get("success", False)
     
