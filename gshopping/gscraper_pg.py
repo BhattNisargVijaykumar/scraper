@@ -1343,7 +1343,7 @@ def _supports_claim_columns(cursor):
 def calculate_parallel_claim_limit(claim_limit=None, products_per_hour=DEFAULT_PRODUCTS_PER_HOUR, max_runtime_hours=DEFAULT_MAX_RUNTIME_HOURS):
     if claim_limit is not None and int(claim_limit) > 0:
         return int(claim_limit)
-    return max(1, int(math.ceil(float(products_per_hour) * float(max_runtime_hours))))
+    return max(4, int(math.ceil(float(products_per_hour) * float(max_runtime_hours))))
 
 def release_expired_claims(ttl_minutes=60):
     """Release old claims so another runner can pick them up."""
@@ -5029,7 +5029,7 @@ def main():
         
         # Apply safety cap (products_per_hour * max_runtime_hours)
         max_capability = int(args.products_per_hour * args.max_runtime_hours)
-        effective_claim_limit = max(1, min(calculated_limit, max_capability))
+        effective_claim_limit = max(4, min(calculated_limit, max_capability))
         print(f"Effective dynamic claim limit (capped at {max_capability}): {effective_claim_limit}")
     else:
         effective_claim_limit = args.claim_limit

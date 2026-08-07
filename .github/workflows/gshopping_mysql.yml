@@ -256,6 +256,9 @@ jobs:
           import time
           import random
           
+          pending_count = 0
+          claimed_count = 0
+          
           try:
               mysql_host = os.environ.get("MYSQL_HOST")
               mysql_port = os.environ.get("MYSQL_PORT", "3306")
@@ -304,9 +307,6 @@ jobs:
               print(f"Pending products globally: {pending_count}")
               print(f"Claimed/in-progress products globally: {claimed_count}")
               
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f"pending_count={pending_count}\n")
-                  f.write(f"claimed_count={claimed_count}\n")
           except Exception as e:
               print(f"Error checking DB: {e}")
               print("⚠️ Database connection failed. Assuming pending products exist to prevent pipeline halts.")
@@ -353,17 +353,6 @@ jobs:
 
             core.info(`Triggered next round depth=${nextDepth}`);
 
-      - name: Resolve Google Seller Page Redirect URLs (Main Repository Only)
-        if: ${{ (github.event.inputs.run_resolve_redirects != 'false') && (github.repository == 'yashypsoft/scraper' || !github.event.repository.fork) }}
-        env:
-          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
-          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
-          MYSQL_USER: ${{ secrets.MYSQL_USER }}
-          MYSQL_PASS: ${{ secrets.MYSQL_PASS }}
-          MYSQL_DB: ${{ secrets.MYSQL_DB }}
-        run: |
-          python resolve_redirects.py --chunk-size 500 --max-workers 15
-
       - name: Generate and upload reports if no products remaining
         if: ${{ github.event.inputs.product_ids == '' && fromJSON(steps.check_rem.outputs.pending_count || '0') == 0 && fromJSON(steps.check_rem.outputs.claimed_count || '0') == 0 }}
         env:
@@ -384,3 +373,4 @@ jobs:
           ORACLE_SFTP_REMOTE_DIR: ${{ secrets.ORACLE_SFTP_REMOTE_DIR }}
         run: |
           python gshopping/export_reports.py
+
