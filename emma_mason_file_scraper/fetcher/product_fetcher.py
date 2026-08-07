@@ -68,12 +68,10 @@ class ProductFetcher:
 
         self.session = requests.Session()
         self.session.headers.update({
-            "method": "GET",
-            "scheme": "https",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "en-US,en;q=0.8",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         })
 
         self._init_success_store()
@@ -142,12 +140,14 @@ class ProductFetcher:
     def http_get(self, url: str) -> Optional[str]:
         for attempt in range(3):
             try:
-                r = self.session.get(url, timeout=15, verify=True, impersonate="chrome124")
+                r = self.session.get(url, timeout=15, verify=True, impersonate="chrome124", allow_redirects=True)
                 if r.status_code == 200:
                     return r.text
-                if r.status_code == 429:
-                    time.sleep(5)
+                logger.warning(f"Status {r.status_code} for {url}")
+                if r.status_code in [429, 503]:
+                    time.sleep(3)
             except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} error for {url}: {e}")
                 time.sleep(1)
         return None
 
@@ -218,6 +218,48 @@ class ProductFetcher:
                         })
             except Exception:
                 continue
+
+        if results:
+            return results
+
+        # Fallback: HTML / Meta tag extraction if JSON-LD block is missing or empty
+        h1 = soup.find("h1")
+        name = h1.text.strip() if h1 else ""
+        if not name:
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                name = og_title["content"].strip()
+
+        if name:
+            price = ""
+            og_price = soup.find("meta", property="product:price:amount") or soup.find("meta", property="og:price:amount")
+            if og_price and og_price.get("content"):
+                price = og_price["content"].strip()
+
+            main_image = ""
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image.get("content"):
+                main_image = og_image["content"].strip()
+
+            results.append({
+                "competitor_product_id": "",
+                "comp_received_name": name,
+                "comp_received_sku": "",
+                "brand": "Emma Mason",
+                "mpn": "",
+                "category": "",
+                "category_url": "",
+                "gtin": "",
+                "quantity": 1,
+                "status": "In Stock",
+                "competitor_price": price,
+                "group_attr_1": "",
+                "group_attr_2": "",
+                "main_image": self.normalize_image(main_image),
+                "competitor_url": url,
+                "scraped_date": self.scraped_date,
+            })
+
         return results
 
     def write_row(self, writer: csv.writer, product: Dict):
@@ -248,13 +290,13 @@ class ProductFetcher:
             return
         self.seen.add(base_url)
 
-        html = self.http_get(base_url)
+        html = self.http_get(product_url)
         if not html:
             self.stats["errors"] += 1
             return
 
         soup = BeautifulSoup(html, "html.parser")
-        products = self.extract_emmamason_data(soup, base_url)
+        products = self.extract_emmamason_data(soup, product_url)
 
         if not products:
             self.stats["errors"] += 1
