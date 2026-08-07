@@ -158,47 +158,65 @@ class ProductFetcher:
                 raw = script.string
                 if not raw:
                     continue
-                data = json.loads(raw)
+                parsed = json.loads(raw)
 
-                if isinstance(data, list):
-                    data = data[0]
-                if not isinstance(data, dict):
-                    continue
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for data in items:
+                    if not isinstance(data, dict):
+                        continue
 
-                selected_offer = data.get("offers", {})
-                images = data.get("image", "")
-                main_image = images[0] if isinstance(images, list) else images or ""
+                    data_type = data.get("@type", "")
+                    if isinstance(data_type, list):
+                        data_type = " ".join(str(t) for t in data_type)
 
-                price = (
-                    selected_offer.get("price", "")
-                    or selected_offer.get("lowPrice", "")
-                    or (data.get("offers", {}).get("price", "") if isinstance(data.get("offers"), dict) else "")
-                )
+                    name = data.get("name", "")
+                    if not name and "Product" not in str(data_type):
+                        continue
 
-                brand_raw = data.get("brand", {})
-                brand = brand_raw.get("name", "") if isinstance(brand_raw, dict) else str(brand_raw)
+                    selected_offer = data.get("offers", {})
+                    if isinstance(selected_offer, list) and selected_offer:
+                        selected_offer = selected_offer[0]
+                    if not isinstance(selected_offer, dict):
+                        selected_offer = {}
 
-                results.append({
-                    "competitor_product_id": "",
-                    "comp_received_name": data.get("name", ""),
-                    "comp_received_sku": data.get("sku", ""),
-                    "brand": brand,
-                    "mpn": data.get("mpn", ""),
-                    "category": "",
-                    "category_url": "",
-                    "gtin": data.get("gtin13", ""),
-                    "quantity": 1,
-                    "status": "In Stock",
-                    "competitor_price": price,
-                    "group_attr_1": data.get("description", ""),
-                    "group_attr_2": data.get("material", ""),
-                    "main_image": self.normalize_image(main_image),
-                    "competitor_url": url,
-                    "scraped_date": self.scraped_date,
-                })
-                if results:
-                    return results
-            except Exception as e:
+                    images = data.get("image", "")
+                    main_image = ""
+                    if isinstance(images, list) and images:
+                        main_image = images[0]
+                    elif isinstance(images, str):
+                        main_image = images
+                    elif isinstance(images, dict):
+                        main_image = images.get("url", "")
+
+                    price = (
+                        selected_offer.get("price", "")
+                        or selected_offer.get("lowPrice", "")
+                        or (data.get("offers", {}).get("price", "") if isinstance(data.get("offers"), dict) else "")
+                    )
+
+                    brand_raw = data.get("brand", {})
+                    brand = brand_raw.get("name", "") if isinstance(brand_raw, dict) else str(brand_raw)
+
+                    if name:
+                        results.append({
+                            "competitor_product_id": "",
+                            "comp_received_name": name,
+                            "comp_received_sku": data.get("sku", ""),
+                            "brand": brand,
+                            "mpn": data.get("mpn", ""),
+                            "category": "",
+                            "category_url": "",
+                            "gtin": data.get("gtin13", ""),
+                            "quantity": 1,
+                            "status": "In Stock",
+                            "competitor_price": price,
+                            "group_attr_1": data.get("description", ""),
+                            "group_attr_2": data.get("material", ""),
+                            "main_image": self.normalize_image(main_image),
+                            "competitor_url": url,
+                            "scraped_date": self.scraped_date,
+                        })
+            except Exception:
                 continue
         return results
 
