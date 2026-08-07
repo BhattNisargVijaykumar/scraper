@@ -15,6 +15,32 @@ try:
 except ImportError:
     pass
 
+# Define columns to dynamically blank out in the exported reports
+BLANK_COLUMNS = [
+    'Brand',
+    'Category',
+    'Product Tags',
+    'Number of Matches',
+    'My Index',
+    'Site Index',
+    'My Position',
+    'Cheapest Site',
+    'Highest Site',
+    'Minimum Price',
+    'Maximum Price',
+    'Average Price',
+    'My Price',
+    'My Product Cost',
+    'Additional Cost',
+    'SmartPrice',
+    'Change direction',
+    'Minimum Price (Total Price)',
+    'Maximum Price (Total Price)',
+    'Average Price (Total Price)',
+    'My Total Price',
+]
+
+
 def get_site_display(competitor_name, seller_name, seller_url, base_url):
     domain = ''
     for url in (seller_url, base_url):
@@ -34,10 +60,7 @@ def get_site_display(competitor_name, seller_name, seller_url, base_url):
     s_name = str(seller_name).strip() if seller_name else ''
     
     if domain and s_name:
-        if domain.lower() == s_name.lower():
-            return s_name
-        else:
-            return f"{domain} — {s_name}"
+        return f"{domain} — {s_name}"
     return s_name or domain or ''
 
 def format_last_update_cycle(dt):
@@ -77,10 +100,7 @@ def get_site_display_and_is_me_batch(comp_list, sel_list, s_url_list, b_url_list
         s_name = str(sel).strip() if sel else ''
         
         if domain and s_name:
-            if domain.lower() == s_name.lower():
-                display = s_name
-            else:
-                display = f"{domain} — {s_name}"
+            display = f"{domain} — {s_name}"
         else:
             display = s_name or domain or ''
             
@@ -159,6 +179,7 @@ def upload_to_oracle_sftp(local_file, remote_filename):
 
 def get_connection():
     mysql_host = os.environ.get("MYSQL_HOST")
+    print(f"DEBUG: mysql_host is '{mysql_host}'")
     mysql_port = os.environ.get("MYSQL_PORT", "3306")
     try:
         mysql_port = int(mysql_port)
@@ -207,7 +228,17 @@ def safe_read_sql(sql, params, conn_holder, max_retries=5):
             time.sleep(2 ** attempt)
 
 def main():
-    if os.environ.get("ORACLE_SFTP_UPLOAD") != "1":
+    import argparse
+    parser = argparse.ArgumentParser(description="Export Scraped Google Shopping Reports")
+    parser.add_argument('--product-ids', type=str, default=None, help="Comma-separated product IDs to filter the report")
+    args = parser.parse_args()
+
+    target_ids = []
+    if args.product_ids:
+        target_ids = [int(x.strip()) for x in args.product_ids.split(",") if x.strip().isdigit()]
+        print(f"Filtering report for {len(target_ids)} specific product IDs: {target_ids}")
+
+    if not args.product_ids and os.environ.get("ORACLE_SFTP_UPLOAD") != "1":
         print("Skipping export generation and upload because ORACLE_SFTP_UPLOAD is not set to '1'.")
         sys.exit(0)
 
@@ -233,15 +264,19 @@ def main():
                     except:
                         conn_holder[0] = get_connection()
                 cursor = conn_holder[0].cursor()
-                cursor.execute(
-                    """
+                query = """
                     SELECT p.product_id 
                     FROM osb_products p
                     JOIN google_shopping_results r ON p.product_id = r.product_id
                     WHERE p.status = 1 
                       AND p.scraping_status = 'completed'
-                    """
-                )
+                """
+                if target_ids:
+                    placeholders = ", ".join(["%s"] * len(target_ids))
+                    query += f" AND p.product_id IN ({placeholders})"
+                    cursor.execute(query, tuple(target_ids))
+                else:
+                    cursor.execute(query)
                 product_ids = [row[0] for row in cursor.fetchall()]
                 cursor.close()
                 break
@@ -265,15 +300,18 @@ def main():
         print(f"Total matching product IDs: {len(product_ids)}")
         
         print("Fetching products and scraped results in single-roundtrip queries...")
-        products_df = safe_read_sql(
-            """
+        brand_select = "'' AS brand" if "Brand" in BLANK_COLUMNS else "p.brand"
+        category_select = "'' AS category" if "Category" in BLANK_COLUMNS else "p.product_type AS category"
+        keyword_select = "'' AS keyword" if "Product Tags" in BLANK_COLUMNS else "p.keyword"
+
+        products_query = f"""
             SELECT 
                 p.product_id, 
                 p.name, 
                 p.gtin, 
-                p.brand, 
-                p.product_type AS category, 
-                p.keyword, 
+                {brand_select}, 
+                {category_select}, 
+                {keyword_select}, 
                 p.url, 
                 p.osb_url, 
                 p.price, 
@@ -283,13 +321,15 @@ def main():
             JOIN google_shopping_results r ON p.product_id = r.product_id
             WHERE p.status = 1 
               AND p.scraping_status = 'completed'
-            """,
-            params=None,
-            conn_holder=conn_holder
-        )
+        """
+        if target_ids:
+            placeholders = ", ".join(["%s"] * len(target_ids))
+            products_query += f" AND p.product_id IN ({placeholders})"
+            products_df = safe_read_sql(products_query, params=tuple(target_ids), conn_holder=conn_holder)
+        else:
+            products_df = safe_read_sql(products_query, params=None, conn_holder=conn_holder)
         
-        results_df = safe_read_sql(
-            """
+        results_query = """
             SELECT 
                 r.product_id, 
                 r.google_title, 
@@ -302,10 +342,13 @@ def main():
             JOIN osb_products p ON p.product_id = r.product_id
             WHERE p.status = 1 
               AND p.scraping_status = 'completed'
-            """,
-            params=None,
-            conn_holder=conn_holder
-        )
+        """
+        if target_ids:
+            placeholders = ", ".join(["%s"] * len(target_ids))
+            results_query += f" AND r.product_id IN ({placeholders})"
+            results_df = safe_read_sql(results_query, params=tuple(target_ids), conn_holder=conn_holder)
+        else:
+            results_df = safe_read_sql(results_query, params=None, conn_holder=conn_holder)
 
         CHUNK_SIZE = 1000
         sellers_frames = []
@@ -361,6 +404,23 @@ def main():
     sellers_clean = sellers_df
     sellers_clean['seller_price'] = pd.to_numeric(sellers_clean['seller_price'], errors='coerce')
     sellers_clean['is_me'] = sellers_clean['is_me'].astype(bool)
+    
+    # Ensure all site display names (even old ones from the DB) use the standard 'domain — seller' format
+    site_displays_updated = []
+    for s_name, s_url, s_display in zip(sellers_clean['seller_name'], sellers_clean['seller_url'], sellers_clean['site_display']):
+        if ' — ' not in str(s_display) and s_name and s_url:
+            try:
+                parsed = urlparse(str(s_url).strip())
+                netloc = parsed.netloc or parsed.path.split('/')[0]
+                domain = netloc.lower().replace('www.', '') if netloc else ''
+                if domain:
+                    site_displays_updated.append(f"{domain} — {s_name}")
+                    continue
+            except Exception:
+                pass
+        site_displays_updated.append(s_display)
+        
+    sellers_clean['site_display'] = site_displays_updated
     
     # 2. Compute my_price per product
     me_sellers = sellers_clean[sellers_clean['is_me']]
@@ -536,6 +596,13 @@ def main():
         'Change direction', 'Stock', 'URL'
     ]
     df2 = df2[cols2]
+
+    # Dynamically blank out columns specified in the BLANK_COLUMNS array
+    for col in BLANK_COLUMNS:
+        if col in df1.columns:
+            df1[col] = ''
+        if col in df2.columns:
+            df2[col] = ''
 
     # Generate file names
     now = datetime.now()
