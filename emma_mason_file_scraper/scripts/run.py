@@ -12,10 +12,8 @@ logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 handler.setFormatter(formatter)
-logger.addHandler(handler)
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from fetcher.product_fetcher import ProductFetcher, load_urls_from_file if 'load_urls_from_file' in globals() else None
+from fetcher.product_fetcher import ProductFetcher
 from utils.sitemap_processor import SitemapProcessor
 
 def load_urls(file_path: str):
