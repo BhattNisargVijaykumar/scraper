@@ -72,6 +72,10 @@ class ProxyManager:
             response_time = time.time() - start_time
             
             if response.status_code == 200:
+                if "google.com" in test_url:
+                    if "sorry/index" in response.url or "captcha" in response.text.lower():
+                        logger.debug(f"Proxy {proxy} blocked by Google captcha")
+                        return False, 0
                 logger.debug(f"Proxy {proxy} working, speed: {response_time:.2f}s")
                 return True, response_time
             return False, 0
@@ -79,6 +83,43 @@ class ProxyManager:
         except Exception as e:
             logger.debug(f"Proxy {proxy} failed: {e}")
             return False, 0
+
+    def get_proxy_for_google(self) -> Optional[str]:
+        current_time = time.time()
+        if (current_time - self.last_proxy_fetch > self.proxy_cache_time or 
+            len(self.working_proxies) < 5):
+            
+            logger.info("Fetching fresh proxies for Google...")
+            all_proxies = self._get_proxies_from_sources()
+            
+            if not all_proxies:
+                logger.warning("No proxies scraped")
+                return None
+            
+            self.working_proxies = []
+            google_url = "https://www.google.com/ncr"
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                futures = {executor.submit(self._test_proxy_speed, proxy, google_url): proxy for proxy in all_proxies[:60]}
+                
+                for future in concurrent.futures.as_completed(futures):
+                    proxy = futures[future]
+                    try:
+                        is_working, _ = future.result()
+                        if is_working:
+                            self.working_proxies.append(proxy)
+                    except Exception:
+                        continue
+            
+            self.last_proxy_fetch = current_time
+            logger.info(f"Found {len(self.working_proxies)} working proxies for Google")
+        
+        if not self.working_proxies:
+            logger.warning("No working proxies available for Google")
+            return None
+        
+        proxy = random.choice(self.working_proxies)
+        logger.info(f"Using proxy for Google: {proxy}")
+        return proxy
     
     def _find_fastest_proxy(self, proxies: List[str], target_url: str = None) -> Optional[str]:
         if not proxies:
