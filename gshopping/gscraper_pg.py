@@ -162,10 +162,7 @@ def get_site_display_and_is_me(competitor_name, seller_name, seller_url, base_ur
     s_name = str(seller_name).strip() if seller_name else ''
     
     if domain and s_name:
-        if domain.lower() == s_name.lower():
-            display = s_name
-        else:
-            display = f"{domain} — {s_name}"
+        display = f"{domain} — {s_name}"
     else:
         display = s_name or domain or ''
         
