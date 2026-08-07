@@ -503,53 +503,14 @@ class emmamasonScraper:
         self.log(f"  Output:              {output_path}")
         self.log("=" * 60)
 
-    def run_from_csv(self, csv_file):
-        self.log(f"Loading URLs from {csv_file}")
-
-        urls = []
-
-        with open(csv_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-
-            for row in reader:
-                url = row.get("existing_competitor_url", "").strip()
-
-                if url:
-                    urls.append(url)
-
-        self.log(f"Found {len(urls)} URLs in CSV")
-
-        os.makedirs(self.output_dir, exist_ok=True)
-        output_path = os.path.join(self.output_dir, "emmamason_selected_urls.csv")
-
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(self.csv_header)
-
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [
-                    executor.submit(self.process_product, url, writer)
-                    for url in urls
-                ]
-
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        self.log(f"Thread error: {e}", "ERROR")
-
-        self.log(f"Output saved: {output_path}")
-
 
 # ============================================================
 #  Entry point
 # ============================================================
 
 if __name__ == "__main__":
-    # if not os.getenv("CURR_URL"):
-    #     sys.stderr.write("[ERROR] CURR_URL environment variable is required\n")
-    #     sys.exit(1)
+    if not os.getenv("CURR_URL"):
+        sys.stderr.write("[ERROR] CURR_URL environment variable is required\n")
+        sys.exit(1)
 
-    scraper = emmamasonScraper()
-    scraper.run_from_csv("input/pending_match_product_report.csv")
-    # scraper.run()
+    emmamasonScraper().run()
